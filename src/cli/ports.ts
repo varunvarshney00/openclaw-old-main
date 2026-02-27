@@ -30,7 +30,64 @@ export function parseLsofOutput(output: string): PortProcess[] {
   return results;
 }
 
-export function listPortListeners(port: number): PortProcess[] {
+export function parseNetstatOutput(output: string, port: number): PortProcess[] {
+  const lines = output.split(/\r?\n/).filter(Boolean);
+  const seen = new Set<number>();
+  const results: PortProcess[] = [];
+  const portSuffix = `:${port}`;
+  for (const line of lines) {
+    const parts = line.trim().split(/\s+/);
+    // netstat -ano format: Proto  LocalAddress  ForeignAddress  State  PID
+    if (parts.length < 5) continue;
+    const [proto, local, , state, pidStr] = parts;
+    if (!proto.startsWith("TCP")) continue;
+    if (state !== "LISTENING") continue;
+    if (!local.endsWith(portSuffix)) continue;
+    const pid = Number.parseInt(pidStr, 10);
+    if (Number.isNaN(pid) || pid === 0 || seen.has(pid)) continue;
+    seen.add(pid);
+    results.push({ pid });
+  }
+  return results;
+}
+
+function resolveCommandNames(procs: PortProcess[]): PortProcess[] {
+  if (procs.length === 0) return procs;
+  try {
+    const out = execFileSync("tasklist", ["/FO", "CSV", "/NH"], { encoding: "utf-8" });
+    const pidMap = new Map<number, string>();
+    for (const line of out.split(/\r?\n/).filter(Boolean)) {
+      // CSV format: "ImageName","PID","SessionName","Session#","MemUsage"
+      const match = line.match(/^"([^"]+)","(\d+)"/);
+      if (match) {
+        pidMap.set(Number.parseInt(match[2], 10), match[1]);
+      }
+    }
+    for (const proc of procs) {
+      const name = pidMap.get(proc.pid);
+      if (name) proc.command = name;
+    }
+  } catch {
+    // tasklist is optional; PIDs alone are enough to kill
+  }
+  return procs;
+}
+
+function listPortListenersWindows(port: number): PortProcess[] {
+  try {
+    const out = execFileSync("netstat", ["-ano"], { encoding: "utf-8" });
+    const procs = parseNetstatOutput(out, port);
+    return resolveCommandNames(procs);
+  } catch (err: unknown) {
+    const code = (err as { code?: string }).code;
+    if (code === "ENOENT") {
+      throw new Error("netstat not found; required for --force on Windows", { cause: err });
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+function listPortListenersUnix(port: number): PortProcess[] {
   try {
     const lsof = resolveLsofCommandSync();
     const out = execFileSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"], {
@@ -48,6 +105,13 @@ export function listPortListeners(port: number): PortProcess[] {
     } // no listeners
     throw err instanceof Error ? err : new Error(String(err));
   }
+}
+
+export function listPortListeners(port: number): PortProcess[] {
+  if (process.platform === "win32") {
+    return listPortListenersWindows(port);
+  }
+  return listPortListenersUnix(port);
 }
 
 export function forceFreePort(port: number): PortProcess[] {

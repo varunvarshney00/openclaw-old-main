@@ -89,10 +89,23 @@ function createSpawnOptions(cmd, args, envOverride) {
   };
 }
 
+/**
+ * On Windows, when using `shell: true`, cmd.exe splits unquoted paths
+ * on spaces. Wrap the command in double-quotes so paths like
+ * `C:\Program Files\nodejs\pnpm.cmd` are treated as a single token.
+ */
+function resolveCommand(cmd) {
+  if (shouldUseShellForCommand(cmd) && cmd.includes(" ")) {
+    return `"${cmd}"`;
+  }
+  return cmd;
+}
+
 function run(cmd, args) {
+  const resolved = resolveCommand(cmd);
   let child;
   try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    child = spawn(resolved, args, createSpawnOptions(cmd, args));
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -111,9 +124,10 @@ function run(cmd, args) {
 }
 
 function runSync(cmd, args, envOverride) {
+  const resolved = resolveCommand(cmd);
   let result;
   try {
-    result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
+    result = spawnSync(resolved, args, createSpawnOptions(cmd, args, envOverride));
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);

@@ -267,6 +267,8 @@ export type AgentEventHandlerOptions = {
   toolEventRecipients: ToolEventRecipientRegistry;
 };
 
+// Jab ChatGPT ya Claude tujhe answer dete hain, toh poora paragraph ek saath nahi aata. Wo ek-ek shabd (tokens) karke type hota hai. Is "typing effect" ko technical bhasha mein Streaming ya Deltas kehte hain.
+// Ye function AI se aane wale un chhote-chhote tukdon (deltas) ko pakadta hai, unko saaf karta hai, aur WebSocket ke through tere frontend (UI) pe bhejta hai taaki user ko live typing dikhe.
 export function createAgentEventHandler({
   broadcast,
   broadcastToConnIds,
@@ -277,6 +279,7 @@ export function createAgentEventHandler({
   clearAgentRunContext,
   toolEventRecipients,
 }: AgentEventHandlerOptions) {
+
   const emitChatDelta = (
     sessionKey: string,
     clientRunId: string,
@@ -284,23 +287,38 @@ export function createAgentEventHandler({
     seq: number,
     text: string,
   ) => {
+
+    // AI hamesha sirf normal text nahi bhejta. Wo andar hi andar system ko commands deta hai (jaise <search_web> ya <thinking>). stripInlineDirectiveTagsForDisplay in technical tags ko kaat kar sirf insaano ke padhne laayak text nikalta hai.
     const cleaned = stripInlineDirectiveTagsForDisplay(text).text;
+
     if (!cleaned) {
       return;
     }
+
+    // Agar AI ne intentionally message ke aage ek "Silent Token" lagaya hai (matlab ye message internal system ke liye hai, user ke liye nahi), toh usko yahin rok do.
     if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
       return;
     }
+
+    // chatRunState.buffers ek RAM (Memory) map hai. Ye naye saaf kiye hue text ko is chat ID ke buffer mein save kar leta hai.
+    // Kyunki hum network pe tukde bhej rahe hain, par system ko end mein poora paragraph bhi toh banana hai. Ye buffer un sab tukdon ko jod kar rakhta hai.
     chatRunState.buffers.set(clientRunId, cleaned);
+
+    // Agar ye text sirf ek background "Heartbeat" (AI bol raha hai "Main zinda hoon, processing kar raha hoon") hai, toh usko user ke chat UI pe mat dikhao. Phat se return maar do.
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
+
+    // KYU HAI: AI 1 second mein 50 naye shabd bhej sakta hai. Agar Gateway ne UI ko har millisecond ek naya shabd bheja, toh tera browser/phone usko render karte-karte hang ho jayega (CPU spike) aur network packets choke ho jayenge.
+    // KAISE KAAM KARTA HAI: Ye check karta hai ki "Kya pichla update bheje hue 150 milliseconds (0.15 seconds) ho gaye hain?". Agar nahi hue (< 150), toh naya update mat bhejo, ruk jao. Agar 150ms cross ho gaye, toh time ko update karo (set) aur message ko aage jaane do.
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
     if (now - last < 150) {
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
+
+    // Ye ek JSON object (Payload) bana raha hai standard format mein, jo exact waisa hi dikhta hai jaisa OpenAI ya Claude ka API response hota hai.
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -312,10 +330,14 @@ export function createAgentEventHandler({
         timestamp: now,
       },
     };
+
+    // KYU HAI (dropIfSlow: true): Ye ek bohot smart Cloud Security/Networking optimization hai. Agar user ka internet slow hai (say, wo train mein mobile net pe hai), toh WebSocket pe data jam (backpressure) hone lagta hai. dropIfSlow system ko bolta hai ki "Agar network jam hai, toh is live-typing packet ko drop kar de, aage ke packets par focus kar."
+    // Note: Delta (live typing) packets drop hone se user ka nuksaan nahi hota, bas typing thodi ruk-ruk ke dikhti hai. Final message jab  aayega toh sab barabar ho jayega.
     broadcast("chat", payload, { dropIfSlow: true });
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
+  // Jab AI apni poori baat khatam kar leta hai (ya beech mein crash ho jata hai), toh Gateway ko us stream ko "Close" karna hota hai. Ye function memory (buffer) mein jama hue saare chhote-chhote tukdon (deltas) ko uthata hai, unko aakhri baar polish karta hai, memory ko saaf (delete) karta hai taaki server crash na ho, aur UI ko final green signal bhej deta hai ki "Bhai, AI ne bolna band kar diya hai, ab next message ka wait karo."
   const emitChatFinal = (
     sessionKey: string,
     clientRunId: string,
@@ -324,19 +346,23 @@ export function createAgentEventHandler({
     jobState: "done" | "error",
     error?: unknown,
   ) => {
+
     const bufferedText = stripInlineDirectiveTagsForDisplay(
       chatRunState.buffers.get(clientRunId) ?? "",
     ).text.trim();
+    
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
       text: bufferedText,
     });
+    
     const text = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
       normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+    
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
@@ -356,6 +382,7 @@ export function createAgentEventHandler({
       nodeSendToSession(sessionKey, "chat", payload);
       return;
     }
+    
     const payload = {
       runId: clientRunId,
       sessionKey,

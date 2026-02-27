@@ -40,6 +40,7 @@ export type DisplayMessageWithContent = {
   content?: unknown;
 } & Record<string, unknown>;
 
+// AI (jaise Claude ya GPT) hamesha sirf normal baatein nahi karta. Wo apne text ke andar system ke liye commands bhejta hai, jaise <audio id="123"> ya <reply to="message_456">. Agar ye kachra user ki screen (UI) pe dikh gaya, toh software bohot unprofessional lagega. Ye function ek "Filter" hai jo raw AI text mein se in internal technical tags ko dhoondh kar kaat deta hai, taaki user ko sirf saaf text dikhe.
 export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDirectiveTagsResult {
   if (!text) {
     return { text, changed: false };
