@@ -1,3 +1,8 @@
+// chat.history: User ko pichli baatein (chat history) dikhana.
+// chat.abort: Agar user bole "Bas ruko, mat bolo" (Stop generation), toh usko handle karna.
+// chat.send: User ka naya prompt (prompt text + images) AI ke paas bhejna aur reply ko wapas lana.
+// chat.inject: Bina AI se puche, database mein koi pichli memory ya thought chupke se daalna.
+
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
@@ -69,6 +74,7 @@ const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
 
+// This function removes all non-printable and dangerous control characters from a chat message while keeping normal text, spaces, tabs, and newlines intact.
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
   for (const char of message) {
@@ -77,6 +83,7 @@ function stripDisallowedChatControlChars(message: string): string {
       output += char;
     }
   }
+  console.log("output------>", output);
   return output;
 }
 
@@ -90,6 +97,7 @@ export function sanitizeChatSendMessageInput(
   return { ok: true, message: stripDisallowedChatControlChars(normalized) };
 }
 
+// Chat history text never exceeds a maximum allowed length.
 function truncateChatHistoryText(text: string): { text: string; truncated: boolean } {
   if (text.length <= CHAT_HISTORY_TEXT_MAX_CHARS) {
     return { text, truncated: false };
@@ -530,8 +538,10 @@ function broadcastChatError(params: {
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
+  // Normal apps (jaise WhatsApp) mein tu saari purani chat frontend ko bhej sakta hai. Par AI (LLMs) ke paas ek limit hoti hai jise "Context Window" kehte hain. Agar tu AI ko 10 saal purani poori chat ek saath bhej dega, toh AI ka dimaag (aur tera API bill) dono fatt jayenge. Ye code ensure karta hai ki user ko chat history mile, par utni hi aur usi format mein jo system ke memory budget ke andar ho, aur jisme se kachra saaf kiya gaya ho.
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
+      console.log("params--->", params);
       respond(
         false,
         undefined,
@@ -542,10 +552,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+
     const { sessionKey, limit } = params as {
       sessionKey: string;
       limit?: number;
     };
+    
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const rawMessages =
@@ -598,6 +610,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       verboseLevel,
     });
   },
+
   "chat.abort": ({ params, respond, context }) => {
     if (!validateChatAbortParams(params)) {
       respond(
@@ -669,6 +682,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       runIds: res.aborted ? [runId] : [],
     });
   },
+
   "chat.send": async ({ params, respond, context, client }) => {
     if (!validateChatSendParams(params)) {
       respond(
@@ -980,6 +994,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
   },
+
   "chat.inject": async ({ params, respond, context }) => {
     if (!validateChatInjectParams(params)) {
       respond(

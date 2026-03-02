@@ -1,3 +1,5 @@
+// React/Frontend pe jab tu API call karta hai, toh Express.js ya Next.js mein ek Router hota hai (app.get('/chat'), app.post('/config')). Par WebSockets mein URL nahi badalte, sab kuch ek hi pipe se aata hai. Ye file tera WebSocket Router hai. Ye frontend ki "Method" (jaise method: "chat" ya method: "system.ping") ko padhta hai, aur usko backend ke specific code block (Handler) se jod deta hai. Saath hi, ye ensure karta hai ki kya user ki Aukaat (Role/Scope) hai wo method chalane ki?
+
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
@@ -33,33 +35,58 @@ import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 
+// Pichli files mein humne user se password manga aur verify kiya. Usko bolte hain Authentication (Pehchan - "Tum kaun ho?").
+// Lekin ye function karta hai Authorization (Aukaat - "Tumhari permission kya hai?").
+// Maan le ek employee company mein ghus gaya (Authenticated), par kya wo aam employee bank ke locker room mein ja sakta hai? Nahi! Ye function wahi check karta hai ki kya is user ke paas is specific kaam (method) ko karne ki permission hai ya nahi.
+
+// KYA HAI: Ye teen commands system ke sabse khatarnak methods hain. Ye server ki config badal sakte hain ya system ko update kar sakte hain.
+// KYU HAI: Inko ek alag list (Set) mein rakha gaya hai kyunki pichli file mein tune dekha tha, in commands par ek strict "Rate Limiter" (Budget) lagta hai taaki koi admin account hack hone par bhi inko lagatar spam na kar sake.
 const CONTROL_PLANE_WRITE_METHODS = new Set(["config.apply", "config.patch", "update.run"]);
+
+// KYA HAI: 1. !client?.connect: Agar user ka connection data hi nahi hai (jaise shuruwaati connection ke time), toh auth bypass kar do (baad mein pakdenge).
+// 2. method === "health": "Health" ek public endpoint hota hai. Load balancers (jaise AWS/Nginx) har 10 second mein puchte hain "Bhai zinda ho?". Is chote se sawaal ke liye unse identity card/password mangna bevakoofi hai. Isliye isko seedha return null (Green Signal) de diya.
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
+  // If: There is no client Or client has no connect data Then: Allow the request.
   if (!client?.connect) {
     return null;
+    // Note: Dhyan rakhna, is function mein return null ka matlab hai "Koi error nahi hai, tum aage jaa sakte ho." (Green Signal).
   }
   if (method === "health") {
     return null;
+    // Note: Dhyan rakhna, is function mein return null ka matlab hai "Koi error nahi hai, tum aage jaa sakte ho." (Green Signal).
   }
+
   const roleRaw = client.connect.role ?? "operator";
+  console.log("role raw--------->", roleRaw);
+
   const role = parseGatewayRole(roleRaw);
+  console.log("parsed role raw----->", role);
+
   if (!role) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${roleRaw}`);
   }
+
   const scopes = client.connect.scopes ?? [];
+  console.log("scopes---->", scopes);
+
   if (!isRoleAuthorizedForMethod(role, method)) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
+
   if (role === "node") {
     return null;
   }
+
   if (scopes.includes(ADMIN_SCOPE)) {
     return null;
   }
+
   const scopeAuth = authorizeOperatorScopesForMethod(method, scopes);
+  
   if (!scopeAuth.allowed) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
   }
+  
   return null;
 }
 

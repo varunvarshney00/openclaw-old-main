@@ -1,3 +1,9 @@
+// Ye file tera "Universal Dispatcher & Security Guard" hai. Jab tu browser mein enter marta hai, tere keystrokes JSON ban kar is file mein aate hain. Is file ke do phases hain:
+
+// The Handshake Phase (Auth): Agar user naya hai, toh pehla message hamesha connect hona chahiye. Ye file password check karegi, device check karegi, "Control UI" ka scope check karegi, aur sab theek raha toh hello-ok bhejekar andar aane degi.
+
+// The Active Phase (Routing): Ek baar authenticate ho gaya, toh ab jo bhi message aayega (jaise chat, run_tool, stop_generation), ye file usko padhegi aur aage handleGatewayRequest function ko de degi execute karne ke liye. Saath hi ye DDoS/Flood attacks bhi rokti hai.
+
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import type { WebSocket } from "ws";
@@ -148,6 +154,7 @@ export function attachGatewayWsMessageHandler(params: {
     logWsControl,
   } = params;
 
+  // Headers ko fake karna (IP Spoofing) bohot aasan hai. Koi hacker apne laptop se direct tere server pe HTTP request bhej kar likh sakta hai: x-forwarded-for: 127.0.0.1 (ki main toh admin hoon). Agar tera backend us parchi pe andha vishwas kar lega, toh hacker tere system mein ghus jayega. Ye code ensure karta hai ki backend us parchi par sirf tabhi vishwas kare jab wo kisi "Trusted" Waiter (jaise Cloudflare ya AWS) ke haath se aayi ho.
   const configSnapshot = loadConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
   const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
@@ -159,15 +166,29 @@ export function attachGatewayWsMessageHandler(params: {
     allowRealIpFallback,
   });
 
+  // Bohot saare backend systems mein ek rule hota hai: "Agar request usi same computer (localhost / 127.0.0.1) se aa rahi hai, toh usko Local Admin maan lo aur password mat mango." Ab ek Hacker ka dimaag soch: Tere server pe Nginx (Reverse Proxy) chal raha hai. Hacker internet se Nginx ko request bhejta hai. Nginx usi server ke andar Node.js ko request bhejta hai (127.0.0.1 se). Node.js dekhta hai ki connection 127.0.0.1 se aaya hai aur us hacker ko "Local Admin" samajh kar poora system de deta hai! Isko Auth Bypass via Local Loopback kehte hain.
+
   // If proxy headers are present but the remote address isn't trusted, don't treat
   // the connection as local. This prevents auth bypass when running behind a reverse
   // proxy without proper configuration - the proxy's loopback connection would otherwise
   // cause all external requests to be treated as trusted local clients.
+
+  // KYA HAI: Ye check karta hai ki kya request ke saath koi "Parchi" (x-forwarded-for ya x-real-ip) aayi hai?
   const hasProxyHeaders = Boolean(forwardedFor || realIp);
+
+  // Ye check karta hai ki jis computer/server (remoteAddr) ne direct Node.js se connection banaya hai, kya wo humari trustedProxies ki VIP list mein hai? (Jaise tera apna Nginx server ya AWS ka Load Balancer).
   const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
+  
+  // Ye ek logical trap hai. Ye true tabhi hoga jab request mein "Parchi" (hasProxyHeaders) toh hogi, LEKIN laane wala humara trusted bouncer nahi hoga (!remoteIsTrustedProxy).
   const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
+  
+  // Ye check karta hai ki browser ke URL bar mein user ne kya type kiya tha? Kya usne localhost ya 127.0.0.1 type kiya tha?
   const hostIsLocalish = isLocalishHost(requestHost);
+  
+  // KYA HAI: Ye isLocalishHost ka bada bhai hai. Ye ek deep function call hai jo WebSocket ki puri request ko chhan-bin karke confirm karta hai ki kya ye sach mein usi machine (server ke apne computer) se aayi hai?
+  // FULL STACK MEANING: Agar ye true hai, matlab connection bilkul secure, ghar ke andar (local network/machine) se hi bana hai. Xorthax jaisi apps mein local clients ko kuch extra "Admin" features automatically mil jate hain.
   const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback);
+  
   const reportedClientIp =
     isLocalClient || hasUntrustedProxyHeaders
       ? undefined
@@ -193,50 +214,79 @@ export function attachGatewayWsMessageHandler(params: {
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
   const unauthorizedFloodGuard = new UnauthorizedFloodGuard();
 
+  // Is block mein do phases chal rahe hain. Pehla, jab backend user ka password/IP sab check kar leta hai, toh wo usko ek "Golden Ticket" (hello-ok) bhejta hai, jisse tera frontend (React UI) chat screen load karta hai. Doosra, ek baar user andar aa gaya, toh wo jo bhi message (prompt) likhega, ye file usko padhegi, DDoS/spam se protect karegi, aur sidha tere core backend logic ko pass kar degi. 
+
+  // Frontend se WebSocket par jo bhi data aata hai, wo technically "Kachra" (Untrusted Data) hota hai. Hacker wahan JSON object ki jagah array, number, ya ajeeb strings bhej sakta hai. Ye code us kachre ko dhyan se kholta hai, check karta hai ki kya ye ek valid parcel hai, aur usme se 3 zaruri labels (type, method, aur id) ko ekdum safe tareeqe se nikalta hai taaki backend crash na ho.
   socket.on("message", async (data) => {
+    console.log("data ka type--->", typeof(data));
+    console.log("data ka valeue--->", data);
+
     if (isClosed()) {
       return;
     }
+    
+    // WebSocket se data hamesha binary Buffer (machine code) mein aata hai.
     const text = rawDataToString(data);
+    console.log("text ki value===>", text);
+    
+    // Usme se pehle insaano ke padhne layank text (string) nikala. Phir try-catch ke andar us text ko JSON.parse karke JavaScript Object banaya.
     try {
       const parsed = JSON.parse(text);
+      console.log("parsed ki value====>", parsed)
+
       const frameType =
         parsed && typeof parsed === "object" && "type" in parsed
           ? typeof (parsed as { type?: unknown }).type === "string"
             ? String((parsed as { type?: unknown }).type)
             : undefined
           : undefined;
+
+      console.log("frame type--->", frameType);
+
       const frameMethod =
         parsed && typeof parsed === "object" && "method" in parsed
           ? typeof (parsed as { method?: unknown }).method === "string"
             ? String((parsed as { method?: unknown }).method)
             : undefined
           : undefined;
+
       const frameId =
         parsed && typeof parsed === "object" && "id" in parsed
           ? typeof (parsed as { id?: unknown }).id === "string"
             ? String((parsed as { id?: unknown }).id)
             : undefined
           : undefined;
+
       if (frameType || frameMethod || frameId) {
         setLastFrameMeta({ type: frameType, method: frameMethod, id: frameId });
       }
 
       const client = getClient();
+      
       if (!client) {
         // Handshake must be a normal request:
         // { type:"req", method:"connect", params: ConnectParams }.
+
+        // ///////////////////////////////////////////////////////////////////////////////////
+        
+        // Jab Frontend WebSocket se judta hai, toh backend ka ek simple rule hota hai: "Pehla message hamesha 'connect' (login/handshake) hona chahiye. Agar tumne pehli baari mein seedha 'chat' message bheja, ya galat format mein data bheja, toh main aage baat nahi karunga." Ye code us strict rule ko enforce karta hai aur garbage data ko main engine tak pahunchne se rokata hai.
         const isRequestFrame = validateRequestFrame(parsed);
         if (
+          // Level 1 (!isRequestFrame): Kya message ka structure sahi hai? (Kya isme type: "req" aur id jaisi cheezein hain?).
           !isRequestFrame ||
+          // Level 2 (parsed.method !== "connect"): Kya isne "connect" method hi call kiya hai? Agar isne method: "chat" bhej diya bina login ke, toh reject.
           parsed.method !== "connect" ||
+          // Level 3 (!validateConnectParams(parsed.params)): Theek hai, isne "connect" toh bheja, par kya uske andar bheji gayi details (Client Version, ID, etc.) sahi format mein hain? Ye ek strict Schema Validator (jaise Zod ya JSONSchema) se check hota hai.
           !validateConnectParams(parsed.params)
         ) {
+          
           const handshakeError = isRequestFrame
             ? parsed.method === "connect"
               ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
               : "invalid handshake: first request must be connect"
             : "invalid request frame";
+          
+          // Frontend ko laat maarne se pehle, backend apne register (logs/state) mein note kar leta hai ki "Ye connection fail hua aur uska kaaran ye exact message aur ye exact error tha." Kal ko jab server logs dekhega, toh ekdum clear hoga ki request kahan phati thi.
           setHandshakeState("failed");
           setCloseCause("invalid-handshake", {
             frameType,
@@ -244,6 +294,8 @@ export function attachGatewayWsMessageHandler(params: {
             frameId,
             handshakeError,
           });
+
+          // This code runs when: Something went wrong during the WebSocket handshake.
           if (isRequestFrame) {
             const req = parsed;
             send({
@@ -257,6 +309,8 @@ export function attachGatewayWsMessageHandler(params: {
               `invalid handshake conn=${connId} remote=${remoteAddr ?? "?"} fwd=${forwardedFor ?? "n/a"} origin=${requestOrigin ?? "n/a"} host=${requestHost ?? "n/a"} ua=${requestUserAgent ?? "n/a"}`,
             );
           }
+          // ///////////////////////////////////////////////////////////////////////////////////
+
           const closeReason = truncateCloseReason(handshakeError || "invalid handshake");
           if (isRequestFrame) {
             queueMicrotask(() => close(1008, closeReason));
@@ -275,10 +329,12 @@ export function attachGatewayWsMessageHandler(params: {
           mode: connectParams.client.mode,
           version: connectParams.client.version,
         };
+
         const markHandshakeFailure = (cause: string, meta?: Record<string, unknown>) => {
           setHandshakeState("failed");
           setCloseCause(cause, { ...meta, ...clientMeta });
         };
+        
         const sendHandshakeErrorResponse = (
           code: Parameters<typeof errorShape>[0],
           message: string,

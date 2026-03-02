@@ -351,15 +351,17 @@ export function createAgentEventHandler({
       chatRunState.buffers.get(clientRunId) ?? "",
     ).text.trim();
     
+    // Ye check karta hai ki kya ye poora lamba message actually sirf ek lamba "Heartbeat" (system ping) tha jisko chhupana chahiye? Text ko normalize karke final text variable mein daal diya.
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
       text: bufferedText,
     });
-    
     const text = normalizedHeartbeatText.text.trim();
+
     const shouldSuppressSilent =
       normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
+    
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     
