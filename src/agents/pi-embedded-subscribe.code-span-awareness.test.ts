@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+infraimport { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,

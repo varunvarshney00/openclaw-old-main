@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import {
-  authorizeGatewayConnect,
+import authorizeGatewayConnect, {
   authorizeHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
   resolveGatewayAuth,
@@ -15,15 +14,15 @@ function createLimiterSpy(): AuthRateLimiter & {
   const check = vi.fn<AuthRateLimiter["check"]>(
     (_ip, _scope) => ({ allowed: true, remaining: 10, retryAfterMs: 0 }) as const,
   );
-  const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>((_ip, _scope) => {});
-  const reset = vi.fn<AuthRateLimiter["reset"]>((_ip, _scope) => {});
+  const recordFailure = vi.fn<AuthRateLimiter["recordFailure"]>((_ip, _scope) => { });
+  const reset = vi.fn<AuthRateLimiter["reset"]>((_ip, _scope) => { });
   return {
     check,
     recordFailure,
     reset,
     size: () => 0,
-    prune: () => {},
-    dispose: () => {},
+    prune: () => { },
+    dispose: () => { },
   };
 }
 

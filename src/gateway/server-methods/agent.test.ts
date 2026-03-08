@@ -3,6 +3,8 @@ import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-
 import { agentHandlers } from "./agent.js";
 import type { GatewayRequestContext } from "./types.js";
 
+// vi.hoisted() ensure karta hai ki ye code file ke top pe execute ho — even before imports.
+// vi.fn() ek mock function banata hai.
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   updateSessionStore: vi.fn(),
@@ -12,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   loadConfigReturn: {} as Record<string, unknown>,
 }));
 
+// Vitest mein vi.mock() automatically hoist hota hai (file ke top pe chala jata hai).
+// Isliye agar tum normal variable define karoge, to ho sakta hai wo available na ho jab mock run kare.
 vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {

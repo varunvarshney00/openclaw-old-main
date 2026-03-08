@@ -217,14 +217,14 @@ function jsonUtf8Bytes(value: unknown): number {
 function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const role =
     message &&
-    typeof message === "object" &&
-    typeof (message as { role?: unknown }).role === "string"
+      typeof message === "object" &&
+      typeof (message as { role?: unknown }).role === "string"
       ? (message as { role: string }).role
       : "assistant";
   const timestamp =
     message &&
-    typeof message === "object" &&
-    typeof (message as { timestamp?: unknown }).timestamp === "number"
+      typeof message === "object" &&
+      typeof (message as { timestamp?: unknown }).timestamp === "number"
       ? (message as { timestamp: number }).timestamp
       : Date.now();
   return {
@@ -557,7 +557,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       limit?: number;
     };
-    
+
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const rawMessages =
@@ -575,6 +575,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       messages: normalized,
       maxSingleMessageBytes: perMessageHardCap,
     });
+
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
@@ -683,7 +684,17 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
   },
 
+  // jb client, frontend koi message bhejega tb ye method run hota hai, ki mtlb jb koi chat.send method call krta h tb iss method ko execute krdo. isko humne async bnaya h kyuki bhut sarey kaam ek saath hote h, jaise mssg ko db m save krna, broadcast krna, ai k pass bheja etc.
+  // params -> actual data sent by frontend.
+  // respond ek function h, jiski madad se hum client ko respond back krtey h, but for websocket.
+  // context -> extra info about request jaise auth info, user info, permission, rate limit info.
+  // client -> actual connected websocket client.
   "chat.send": async ({ params, respond, context, client }) => {
+    // ye validatechatsendparams check kr rha h ki bheje gye params valid h ya nhi, isko library ki madad se bnaya gya h. toh isme humne param pass kr diya agr valid nhi h toh user ko respond krdo, error shape m wrna neeche chle jao. validation hmare backend ko protect krke rkhta h.
+    // respond(false, ...)
+    // Usually structured like:
+    // respond(success, data, error)
+    // ye block sirf itna kr rha h, ek safety gate h jo ensure krta h valid chat messages hi process ho.
     if (!validateChatSendParams(params)) {
       respond(
         false,
@@ -693,8 +704,21 @@ export const chatHandlers: GatewayRequestHandlers = {
           `invalid chat.send params: ${formatValidationErrors(validateChatSendParams.errors)}`,
         ),
       );
+      // ye return ki bhut zarurat h yha agr return nhi krwaingey toh code neechey kak bhi chlta rhega, rukega nhi. ye execution ko stop krdeta h.
       return;
     }
+
+    // isko typescript type assertion kehtey h
+    // params as {} ka mtlb h, trust me. i know params has this structure. treat params as strongly typed object. give me autocomplete and typesafety.
+    // i can now write p.sessionKey, p.message etc.
+    // ye chat session ko identify krega, iski madad se hum chat history load kr skte h, messages store kr skte h, 
+    // ye aaya hmara actual user message, yehi core payload h jo ai ko bheja jayega, db ko etc.
+    // UI display of “thinking...”
+    // agr true h toh mtlb deliver krna h user ko message agr false h toh mtlb deliver nhi krna h.
+    // attachments hmari images ho skti h, pdf ho skti h, audio, json file etc, mtlb ki uski type kya hogi.
+    // unknown means we do not know the exact type yet. using unknown is safer than any. typescript gives up safety. With unknown, TypeScript forces you to check type before using it.
+    // timeoutMs -> timeout in milliseconds.Abort operation after 30 seconds, Stop AI call if too slow. Prevent hanging requests
+    // idempotencyKey -> If client accidentally sends the same request twice (network retry, double-click, reconnect): Backend checks: “Have I already processed this idempotencyKey?” If yes → return previous result If no → process normally
     const p = params as {
       sessionKey: string;
       message: string;
@@ -709,7 +733,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       idempotencyKey: string;
     };
+
+    // “Is the actual message content safe and acceptable?”
     const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
+
     if (!sanitizedMessageResult.ok) {
       respond(
         false,
@@ -718,11 +745,22 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+
+    // yha pr humne clean message nikal liya sanitizedmessageresult mein se. You are NOT using the raw client input anymore. You’re using a trusted version. That’s secure design.
     const inboundMessage = sanitizedMessageResult.message;
+
+    // This likely checks if the message is something like: /stop cancel abort
     const stopCommand = isChatStopCommandText(inboundMessage);
+    
+    // Earlier, attachments came from RPC layer, But AI/chat layer likely expects a different format. So this function converts: RPC format ➜ Internal Chat format
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
+    
+    // trim aagey peeche k white spaces nikal deta hai. abhi hmara jo user ka trim hua message hai wo rawMessage k andar h.
     const rawMessage = inboundMessage.trim();
+    
+    // yha pr hum ensure kr rhe hain ki message exist krta hai. aur attachments bhi exist krtey hain. this prevents meaningless api calls. agr dono m se koi ek cheez bhi hai toh ye block nhi chlega aur code aagey bhd jayega pr agr dono nhi h toh ye block chl jayega.
     if (!rawMessage && normalizedAttachments.length === 0) {
+      // respond() ke andar jo bhi data tum pass karte ho, wo WebSocket ke through client (frontend/user) tak bheja jata hai. Ye WebSocket ke through hi jata hai, Structured JSON format mein jata hai, Sirf us client ko jata hai jisne request bheji, Ye HTTP response nahi hai Ye real-time RPC-style response hai
       respond(
         false,
         undefined,
@@ -730,14 +768,22 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+
+    // user k message ko parsedMessage k andar daldiya hai.
     let parsedMessage = inboundMessage;
+    // no parsed images
     let parsedImages: ChatImageContent[] = [];
+
+    // Ye block attachments ko safely process karne ka layer hai — aur production-grade safety checks laga raha hai. ye code tb run hoga jb user ne attachment bhi bheji ho. Iska kaam hai: Attachments ko validate karna. Size limit enforce karna. Unko AI-friendly format me convert karna. Errors ko safely handle karna.
     if (normalizedAttachments.length > 0) {
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
+          // Total attachment size 5MB se zyada hua → reject.
           maxBytes: 5_000_000,
+          // Agar error aaye ya suspicious input mile → Ye logging system me record hoga
           log: context.logGateway,
         });
+        // yha hmara data parse hokr k aagya. Yani system ready hai multimodal AI input ke liye.
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
       } catch (err) {
@@ -745,15 +791,25 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+
+    // Ye client se directly aaya hua session identifier hai.
     const rawSessionKey = p.sessionKey;
+    
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    
+    // yha hum pta lga rhe hain ki agent kitney time tk run krega or uska timeout kb hoga. production systems m timeout mandatory h.
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
     });
+    
+    // current time stamp nikal liya yha se.
     const now = Date.now();
+    
+    // Ye bahut important hai. Idempotency key ka matlab: Agar same request dobara aaye, to system duplicate process na kare.
     const clientRunId = p.idempotencyKey;
 
+    // Ye decide karta hai ki iss session se message bhejne ki permission hai ya nahi.
     const sendPolicy = resolveSendPolicy({
       cfg,
       entry,
@@ -761,6 +817,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       channel: entry?.channel,
       chatType: entry?.chatType,
     });
+
+    // agr resolvesendpolicy se bheja deny, toh message process nhi hoga. system client ko error send kr dega. 
     if (sendPolicy === "deny") {
       respond(
         false,
@@ -770,7 +828,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Agar user ne /stop type kiya hai:
+    // System yaha normal chat nahi run karega.
     if (stopCommand) {
+      // Ye karta kya hai? Is session ke active AI runs ko find karta hai Unko abort karta hai Partial outputs preserve karta hai (agar streaming tha) Cleanup karta hai Very important for streaming AI systems.
       const res = abortChatRunsForSessionKeyWithPartials({
         context,
         ops: createChatAbortOps(context),
@@ -790,6 +851,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    // Ye block ensure karta hai ki agar same idempotencyKey wala AI run already process ho raha hai, to system naya run start na kare aur client ko “in_flight” status de de — taaki duplicate execution aur resource waste prevent ho.
     const activeExisting = context.chatAbortControllers.get(clientRunId);
     if (activeExisting) {
       respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
@@ -800,7 +862,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     try {
+      // Jab tu UI pe "Send" button dabata hai, toh backend seedha LLM (Claude/GPT) ko message nahi bhejta. Usse pehle use ek "Kill Switch" (rukne ka button) banana padta hai, Frontend ko ek "Parchi" (receipt) deni padti hai ki message mil gaya, aur sabse zaroori—AI ko secretly batana padta hai ki aaj date kya hai, warna AI sochega ki wo abhi bhi 2023 mein jee raha hai!
       const abortController = new AbortController();
+      
+      // Maan le AI bohot lamba code likh raha hai aur user ko beech mein hi rokna hai (UI pe "Stop Generation" button dabaya). Agar backend mein ye kill switch nahi hoga, toh server backend mein API ko call karta rahega, tere OpenAI ke paise kat-te rahenge, aur server hang ho jayega.
+      // Jab user "Stop" dabayega, Gateway is map mein dhoondhega aur abortController.abort() call kar dega, jisse AI stream turant ruk jayegi. Saath hi, agar AI API atak jaye, toh expiresAtMs ek timeout ki tarah kaam karega aur task ko automatically kill kar dega.
+      // This code is registering a live AI request with a stop button and expiry timer so the system can manage it safely.
       context.chatAbortControllers.set(clientRunId, {
         controller: abortController,
         sessionId: entry?.sessionId ?? clientRunId,
@@ -808,52 +875,96 @@ export const chatHandlers: GatewayRequestHandlers = {
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
       });
+      
+      // KYA HAI: Backend ne immediately frontend ko ek started status ka message bhej diya.
+      // KYU HAI: Frontend (React) ko pata hona chahiye ki backend ne kaam shuru kar diya hai taaki wo UI pe ek "Loading Spinner" (Thinking... dots) dikha sake. AI ka pehla word aane mein 1-2 seconds lag sakte hain. Agar ye ackPayload nahi bheja, toh user sochega ki app hang ho gayi hai aur baar-baar 'Send' dabayega. Ye UX (User Experience) ka best practice hai.
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
+      // KYA HAI: Ye check kar raha hai ki kya user ne UI se koi "Thinking Level" (jaise High, Low) select kiya tha? Agar kiya tha, aur message kisi command (/) se start nahi hota, toh backend secretly prompt ke aage /think high (ya jo bhi level ho) laga deta hai.
+      // KYU HAI: AI engines commands samajhte hain. Frontend UI mein user ko sirf ek dropdown dikhta hai, par backend usko ek proper system command mein convert kar deta hai taaki Routing engine samajh sake ki is baar konsa AI model (e.g., Claude 3.5 vs OpenAI o3-mini) use karna hai.
+      // Removes whitespace from both ends of the message.
       const trimmedMessage = parsedMessage.trim();
+      // “Should we automatically inject a hidden /think command?”
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
+
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
+      
+      // KYA HAI: Backend tere likhe hue message ke andar secretly current Date aur Time ghusa (inject) deta hai.
+      // KYU HAI (The Classic AI Hack): LLMs ka training data purana hota hai. Unko nahi pata ki aaj March 2026 hai ya Tuesday hai. Agar tu AI se puchega "What day is tomorrow?", toh bina is line ke wo galat jawab dega. Ye function message ko modify karke kuch aisa bana deta hai:
+      // Original: "What day is tomorrow?"
+      // Stamped (Only for AI): [System Note: Current Time is Tuesday, March 3, 2026] What day is tomorrow?
+      // KHAAS BAAT: Dhyan de developer ke comment par: "Body stays raw for UI display". Ye extra time-stamp sirf AI ko dikhega, Frontend chat window mein tere message mein ye ganda sa timestamp nahi dikhega. UI clean rahegi!
       const clientInfo = client?.connect?.client;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
       const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
 
+      // This object packages everything the rest of the pipeline needs about the incoming message.
       const ctx: MsgContext = {
+        // the cleaned message text (what the user sent).
         Body: parsedMessage,
+
+        // a version intended for the agent/LLM (may include stamps/metadata).
         BodyForAgent: stampedMessage,
+        
+        // the message as a command (after /think injection or similar).
         BodyForCommands: commandBody,
+
+        // original raw text for logging or persistence.
         RawBody: parsedMessage,
         CommandBody: commandBody,
+
+        // identifies the chat session (used to look up session data/state).
         SessionKey: sessionKey,
+
+        // ndicates this came from an internal system channel (not e.g. an external platform).
         Provider: INTERNAL_MESSAGE_CHANNEL,
         Surface: INTERNAL_MESSAGE_CHANNEL,
         OriginatingChannel: INTERNAL_MESSAGE_CHANNEL,
+
+        // the type of chat (direct message vs group / room).
         ChatType: "direct",
+
+        // says command processing is allowed for this message.
         CommandAuthorized: true,
+
+        // unique id for this run/message; used to correlate logs, responses, cancellable runs.
         MessageSid: clientRunId,
+
+        // who sent it (for attribution and persona).
         SenderId: clientInfo?.id,
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
+        
+        // permissions/scopes of the connecting client (may gate certain commands).
         GatewayClientScopes: client?.connect?.scopes,
       };
 
+      // This picks the agent ID that should respond for this session.
+      // It likely checks session-specific settings and fallback config (cfg) to decide which bot/agent persona or model should handle the request.
+      // The returned agentId is used to tailor prefixes, system messages, or routing logic.
       const agentId = resolveSessionAgentId({
         sessionKey,
         config: cfg,
       });
+
+      // sbse pehle createReplyPrefixOptions wala function run hoga, wo ek object return krega, phir uske bad object destructuring ho rhi hai. take onModelSelected and store it in a variable, take everything else and store it in prefixOptions."..." isko rest operator boltey h. iss pattern ko hum tb use krtey h jb ek property ko separately handle krna ho, yha pr onModelSelected. onModelSelected ko separate isliye rkha gya h taaki independently badme use kr skein. 
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
+      
+      // ye humne empty array of strings bna liya. string[] means array containing strings. ai ka response multiple pieces m aa skta h, toh unn
       const finalReplyParts: string[] = [];
+      
       const dispatcher = createReplyDispatcher({
         ...prefixOptions,
         onError: (err) => {
@@ -872,6 +983,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
 
       let agentRunStarted = false;
+      
       void dispatchInboundMessage({
         ctx,
         cfg,

@@ -50,6 +50,17 @@ function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   return chatType === "unknown" ? undefined : chatType;
 }
 
+// Ye decide karta hai ki iss session se message bhejne ki permission hai ya nahi.
+// Ye system kuch cheezein dekh kar decision leta hai:
+// Session override hai kya?
+// Global policy kya kehti hai?
+// Channel kya hai? (web / mobile / api)
+// Chat type kya hai? (ai / support / system)
+// Session key kis prefix se start ho raha hai?
+// Koi rule explicitly deny to nahi kar raha?
+// Aur in sab ke basis pe return karta hai:
+// "allow"  // message process karo
+// "deny"   // message block karo
 export function resolveSendPolicy(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;

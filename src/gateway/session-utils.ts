@@ -176,15 +176,30 @@ export function deriveSessionTitle(
   return undefined;
 }
 
+// yha pr sessionKey humne bheji chat.ts se. ye hmara session identifier h. 
+// Given a sessionKey → correct config, storage location, and session entry load karna — safely and consistently.
 export function loadSessionEntry(sessionKey: string) {
+  // Ye system configuration load karta hai. Isme ho sakta hai: Agents list, Session storage config,Timeout defaults, Feature flags, Model settings, Ye pura system ka “control panel” hai.
   const cfg = loadConfig();
+
+  // Global config me se session-related part nikala.
   const sessionCfg = cfg.session;
+  
+  // raw input ko humne trim krke clean krke canonicalKey bnali h, ab yhi chlegi.
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey });
+  
+  // Yaha system decide karta hai: Ye session kis agent ke under aata hai? Example: Support agent AI agent Custom bot Different models
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
+  
+  // Ab system decide karta hai: Session data physically kaha store hoga?
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
+  
   const store = loadSessionStore(storePath);
+  
   const match = findStoreMatch(store, canonicalKey, sessionKey.trim());
+  
   const legacyKey = match?.key !== canonicalKey ? match?.key : undefined;
+  
   return { cfg, storePath, store, entry: match?.entry, canonicalKey, legacyKey };
 }
 
