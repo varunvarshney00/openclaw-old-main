@@ -48,6 +48,7 @@ import {
 } from "./net.js";
 // KYA HAI: Credentials nikalne ka aur network/IP address check karne (ki request localhost se aayi hai ya bahar se) ke helpers import kiye hain.
 
+// jo hmara resolvedgatewayauthmode k types h wo ye 4 hain, ye sirf inhi 4 types ka ho skta h. mtlb user inn 4 tareekon se hi authenticate kr skta h, ya toh none, using a token, using a password, using a trusted-proxy.
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 
 export type ResolvedGatewayAuthModeSource =
@@ -113,6 +114,8 @@ type TailscaleUser = {
 
 type TailscaleWhoisLookup = (ip: string) => Promise<TailscaleWhoisIdentity | null>;
 
+// trim() -> // Ye string ke start aur end ke extra spaces hata deta hai.
+// 
 function normalizeLogin(login: string): string {
   return login.trim().toLowerCase();
 }
@@ -318,18 +321,26 @@ export function resolveGatewayAuth(params: {
   };
 }
 
+////////////////////////////////////////////////////
+
+// Jab server start hota hai, toh request aane ka wait karne ke bajaye, yeh function pehle hi check kar leta hai ki admin/developer ne config file mein koi bevakoofi toh nahi ki hai. Agar setting galat hai, toh yeh server ko wahin crash kar dega taaki baad mein production mein aafat na aaye.
 export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
   if (auth.mode === "token" && !auth.token) {
+    
+    // Agar admin ne token nahi diya, par VPN login on rakha hai, toh hum server ko crash nahi karenge kyunki log kam se kam VPN ke through toh andar aa hi sakte hain.
     if (auth.allowTailscale) {
       return;
     }
+
     throw new Error(
       "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
     );
   }
+
   if (auth.mode === "password" && !auth.password) {
     throw new Error("gateway auth mode is password, but no password was configured");
   }
+
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
       throw new Error(
@@ -343,6 +354,8 @@ export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
     }
   }
 }
+
+///////////////////////////////////////////////////
 
 /**
  * Check if the request came from a trusted proxy and extract user identity.
@@ -390,6 +403,8 @@ function authorizeTrustedProxy(params: {
 function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
   return authSurface === "ws-control-ui";
 }
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // ye hmara main function hai, chief security officer yhi h hmara. yha hmare gateway ko decide krna h ki incoming jo request h usko system k andar allow krna h ya nhi.
 // Is decision ke liye system ko kuch cheezein pata honi chahiye:
@@ -610,6 +625,8 @@ export default async function authorizeGatewayConnect(
     }
   }
 
+  // yeh block tumhare system ka "Token Authentication" engine hai. Agar user VIP proxy se nahi aaya, aur VPN (Tailscale) bhi use nahi kar raha, toh usko andar aane ke liye ek Secret Token (API Key jaisa) dikhana padega. Yeh code usi token ko verify karta hai.
+  // Yeh poora block ek secure, production-ready Token Validator hai. Yeh sirf token match nahi karta, balki edge cases (jaise server mein hi token na hona) ko handle karta hai. Sabse zaroori baat, yeh har galat koshish par Rate Limiter ko batata hai ki "Is user ko flag karo" (Record Failure), jisse Brute-Force attacks namumkin ho jate hain. Aur security ko top-tier rakhne ke liye yeh Timing Attacks se bachne wala safeEqualSecret comparison use karta hai. Sahi token milne par hi yeh saare flags hata kar access allow karta hai.
   if (auth.mode === "token") {
     if (!auth.token) {
       return { ok: false, reason: "token_missing_config" };
@@ -646,6 +663,8 @@ export default async function authorizeGatewayConnect(
   limiter?.recordFailure(ip, rateLimitScope);
   return { ok: false, reason: "unauthorized" };
 }
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 export async function authorizeHttpGatewayConnect(
   params: Omit<AuthorizeGatewayConnectParams, "authSurface">,

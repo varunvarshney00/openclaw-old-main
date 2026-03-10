@@ -98,12 +98,14 @@ export async function resolveGatewayRuntimeConfig(params: {
   const tailscaleOverrides = params.tailscale ?? {};
   const tailscaleConfig = mergeGatewayTailscaleConfig(tailscaleBase, tailscaleOverrides);
   const tailscaleMode = tailscaleConfig.mode ?? "off";
+
   const resolvedAuth = resolveGatewayAuth({
     authConfig: params.cfg.gateway?.auth,
     authOverride: params.auth,
     env: process.env,
     tailscaleMode,
   });
+  
   const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
   const hasToken = typeof resolvedAuth.token === "string" && resolvedAuth.token.trim().length > 0;
   const hasPassword =
@@ -122,6 +124,7 @@ export async function resolveGatewayRuntimeConfig(params: {
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
   assertGatewayAuthConfigured(resolvedAuth);
+
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
