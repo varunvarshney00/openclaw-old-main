@@ -143,60 +143,108 @@ export function isWhatsAppGroupJid(value: string): boolean {
 
 
 
+
+
+
+// Jab OPENCLAW ke paas WhatsApp API se koi message aayega, toh aapke server ko turant decide karna padega: "Kya ye kisi group se aaya hai, ya kisi akele bande ne direct message (DM) kiya hai?" Kyunki iske basis par hi aapka Prisma ORM decide karega ki User table mein entry karni hai ya Group table mein. Ye function wahi confirm karta hai.
 /**
  * Check if value looks like a WhatsApp user target (e.g. "41796666864:0@s.whatsapp.net" or "123@lid").
  */
 export function isWhatsAppUserTarget(value: string): boolean {
+
+  // Sabse pehle input ko apne purane vishwasniya function (stripWhatsAppTargetPrefixes) ke andar daala. Isne aage-peeche ka saara whatsapp: wala kachra saaf kar diya. Ab hmare paas ek clean string candidate hai.
   const candidate = stripWhatsAppTargetPrefixes(value);
+
+  // Backend, candidate string ko un dono (Regex) se pass karta hai jo humne thodi der pehle padhi thi:
+  // Pehla test: Kya ye normal user ID hai? (WHATSAPP_USER_JID_RE.test(...)). Matlab kya ye 919876543210@s.whatsapp.net jaisa dikhta hai?
+  // Doosra test: Kya ye nayi privacy wali Local ID hai? (WHATSAPP_LID_RE.test(...)). Matlab kya ye 123456789@lid jaisa dikhta hai?
+  // Agar in dono mein se koi ek bhi test paas ho gaya (true), toh ye function turant true phek dega ki "Haan bhai, ye ek akela WhatsApp user hi hai!"
   return WHATSAPP_USER_JID_RE.test(candidate) || WHATSAPP_LID_RE.test(candidate);
 }
 
 
 
 
+
+
+
+// Pichle functions mein humne sirf "Check" kiya tha ki ID sahi hai ya nahi (using regex.test()). Par ab time aa gaya hai us ID ka operation karke uske andar se "Asli Phone Number" bahar nikalne ka.
 /**
  * Extract the phone number from a WhatsApp user JID.
  * "41796666864:0@s.whatsapp.net" -> "41796666864"
  * "123456@lid" -> "123456"
  */
 function extractUserJidPhone(jid: string): string | null {
+
+  // Step 1: The Operation (.match vs .test): Pichli baar humne .test() use kiya tha, jo sirf true ya false batata hai. 
+  // Yahan hum string ka method .match() use kar rahe hain. Agar string Regex se match hoti hai, toh .match() ek Array (List) return karta hai. Is list mein kya hota hai?
+  // Index [0]: Poori ki poori string (e.g., "41796666864:0@s.whatsapp.net").
+  // Index [1]: Wo hissa jo humne Regex mein brackets () ke andar rakha tha! (Yaad hai pichli baar maine bataya tha (\d+) ek Capture Group hota hai?).
   const userMatch = jid.match(WHATSAPP_USER_JID_RE);
+
+  // Step 2: The Extraction: Agar userMatch successful hua (matlab array wapas aaya), toh seedha us array ka Index 1 (userMatch[1]) return kar do.
+  // Ye Index 1 exactly wahi pure phone number hai ("41796666864") jo us ajeeb si JID ke andar fasa hua tha. Saara kachra (:0@s.whatsapp.net) Index 0 mein hi chhoot gaya!
   if (userMatch) {
     return userMatch[1];
   }
+
+  // Agar wo normal phone number nahi tha, toh check karo ki kya wo naya Privacy wala "LID" (Local ID) hai? Agar haan, toh us LID regex ke Capture Group (\d+) ko nikal lo (lidMatch[1]) aur return kar do.
   const lidMatch = jid.match(WHATSAPP_LID_RE);
   if (lidMatch) {
     return lidMatch[1];
   }
+
+  // Agar wo string na toh normal user ID nikli aur na hi LID, toh system crash karne ki jagah seedha null (kuch nahi) return kar do. Isko Graceful Degradation kehte hain.
   return null;
 }
 
+
+
+
+
+
+// Is function ne khud koi naya dimaag nahi lagaya. Isne bas un saare chote-chote specialists (regex, strippers, extractors) ko ek assembly line mein khada kar diya hai, jo humne pichle kuch ghanto mein ek-ek karke udede the.
 // Yahi wo main function hai jisko tera API router call karega jab bhi WhatsApp se koi message aayega.
+// Ye value hmara raw string hai jo meta ki api humein bhej rhi hai.
 export function normalizeWhatsAppTarget(value: string): string | null {
+
+  // Jaise hi Meta se raw string aayi, sabse pehle usko stripWhatsAppTargetPrefixes (wo infinite loop wala function) ke paas bheja gaya. Agar string mein sirf "whatsapp:" hi likha tha aur saaf karne ke baad kuch bacha hi nahi (!candidate), toh seedha null (Reject) phek do.
   const candidate = stripWhatsAppTargetPrefixes(value);
   if (!candidate) {
     return null;
   }
 
-  // 
+  // Manager check karta hai, "Kya ye group hai?" Agar haan, toh us group ki ID (localPart) nikalta hai aur ekdum standard, clean @g.us lagakar return kar deta hai. 
+  // Database mein ekdum saaf Group ID jayegi.
   if (isWhatsAppGroupJid(candidate)) {
     const localPart = candidate.slice(0, candidate.length - "@g.us".length);
     return `${localPart}@g.us`;
   }
+
+
   // Handle user JIDs (e.g. "41796666864:0@s.whatsapp.net")
+  // Agar ye koi akela insaan hai (JID ya LID), toh:  
   if (isWhatsAppUserTarget(candidate)) {
+    
+    // extractUserJidPhone (Surgeon) ko bulao, us ajeeb JID mein se pure phone number nikalne ke liye.
     const phone = extractUserJidPhone(candidate);
     if (!phone) {
       return null;
     }
+    
+    // Us pure number ko normalizeE164 (Cleaner) ko de do taaki wo universally accepted +9198765... format mein badal jaye.
     const normalized = normalizeE164(phone);
+
+    // Agar number sahi length ka hai, toh usko return kar do.
     return normalized.length > 1 ? normalized : null;
   }
-  // If the caller passed a JID-ish string that we don't understand, fail fast.
-  // Otherwise normalizeE164 would happily treat "group:120@g.us" as a phone number.
+
+  // Agar string mein @ hai (matlab wo email ya koi anjaan JID hai) jo na toh Group hai aur na hi valid User... toh usko yahin rok do!
   if (candidate.includes("@")) {
     return null;
   }
+
+  // Agar string mein koi @ nahi tha, matlab Meta ne ya user ne seedha plain number bheja tha (9876543210). Toh chup-chaap usko normalizeE164 mein daalo aur standard format return kar do.
   const normalized = normalizeE164(candidate);
   return normalized.length > 1 ? normalized : null;
 }

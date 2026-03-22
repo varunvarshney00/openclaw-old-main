@@ -1,3 +1,21 @@
+// Socho tumhe apne laptop se ek remote AI server (Gateway) se connect karna hai. 
+// Uske liye tumhe ek lamba choda address, secret password, aur configuration deni padegi. 
+// Yeh file tumhe ek neat aur simple tarika deti hai terminal mein command type karke us remote system se connect hone ka (jaise openclaw acp --token mytoken). 
+// Yeh user ki aadi tension yahin khatam kar deta hai ki input kaise lena hai.
+
+// Data Flow Journey
+// User action hoti hai → Developer terminal mein command type karta hai (e.g., acp --token 123 --verbose).
+// Library parse karti hai → commander library is text ko padh kar samajhti hai ki user kya chahta hai.
+// Validation hoti hai → Code check karta hai ki token file se aaya hai ya direct likha gaya hai (resolveSecretOption function ke through).
+// Security Check hota hai → Agar password khule aam screen par type kiya gaya hai, toh system ek warning fekta hai (warnSecretCliFlag).
+// Action Execute hota hai → Sab kuch sahi hone par, data aage badha diya jata hai aur asli background server ya client start ho jata hai.
+
+// Real-life analogy: Yeh file ek Restaurant ke Waiter ki tarah kaam karti hai. Tum (User) apna order (Command) dete ho. Waiter us order ko sunta hai, apne notepad par note karta hai (Parsing), dekhta hai ki koi item menu mein hai ya nahi (Validation), aur fir exactly order le jaakar andar Kitchen mein Chef (Gateway/Client code) ko de deta hai banane ke liye. Yeh file khud khana (logic) nahi banati, sirf order pass karti hai.
+
+// ACP = Agent Control Protocol
+// Matlab: Ek protocol (communication rule set) jiske through clients, gateways, aur agents aapas me baat karte hain.
+
+
 import type { Command } from "commander";
 import { runAcpClientInteractive } from "../acp/client.js";
 import { readSecretFromFile } from "../acp/secret-file.js";

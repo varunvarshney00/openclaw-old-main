@@ -1,3 +1,8 @@
+// Jab bhi hum terminal mein openclaw gateway run type karte hain, toh yeh script background mein chalti hai. 
+// Iska kaam OpenClaw ke "Gateway" (main communication server) ko start karna hai.
+
+// Server start karna sirf ek command nahi hota. Humein port check karna padta hai, password (token) check karna padta hai, IP address kispe bind karna hai (LAN, localhost, etc.) woh dekhna padta hai. Yeh file user ke diye hue flags (jaise --port 3000 --verbose) ko leti hai, unhe validate karti hai, security check karti hai, aur finally safely server ko on karti hai.
+
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
