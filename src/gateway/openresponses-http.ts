@@ -1,3 +1,21 @@
+// Yeh file ek HTTP bridge hai jo bahar se aane wali requests (text, images, files, tools) ko pakadti hai, AI Agent ko run karti hai, aur uske output ko wapas client ko bhejti hai --> ya toh ek saath (Non-Streaming), ya word-by-word (Streaming Server-Sent Events - SSE).
+
+// Yeh effectively OpenAI ke /v1/chat/completions endpoint jaisa hi ek system hai, par OpenClaw ke architecture ke hisaab se.
+
+// pt. 1 (The Gateway): AI Agent core engine mein chalta hai. Par bahar ki duniya (web apps, mobile apps, curl commands) direct engine se baat nahi kar sakti. Unhe ek REST API chahiye.
+
+// pt. 2 (Input Complexity): User sirf "Hi" nahi bhejta. Woh PDFs (input_file), URLs se images (input_image), aur extra instructions bhi bhejta hai. In sabko parse karke ek single context banana padta hai.
+
+// Sach 3 (Output Modes): AI jab lamba answer likhta hai toh wait karna boring hota hai. Isliye API ko dono modes support karne padte hain:
+  // Wait & get full answer (Non-Streaming).
+  // Get words as they are typed (Streaming via SSE).
+
+// pt. 4 (Tool Usage): AI sirf bolta nahi hai, action bhi leta hai. Agar AI ko lagta hai ki use koi third-party tool chalana chahiye, toh usko apna output rok kar client ko bolna padta hai: "Bhai, pehle yeh tool chala ke laa" (Function Calling).
+
+// Yeh akeli file in saari complexities ko handle kar rahi hai!
+
+
+
 /**
  * OpenResponses HTTP Handler
  *
@@ -266,12 +284,15 @@ export async function handleOpenResponsesHttpRequest(
   res: ServerResponse,
   opts: OpenResponsesHttpOptions,
 ): Promise<boolean> {
+
   const limits = resolveResponsesLimits(opts.config);
+  
   const maxBodyBytes =
     opts.maxBodyBytes ??
     (opts.config?.maxBodyBytes
       ? limits.maxBodyBytes
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
+  
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/responses",
     auth: opts.auth,
@@ -280,9 +301,11 @@ export async function handleOpenResponsesHttpRequest(
     rateLimiter: opts.rateLimiter,
     maxBodyBytes,
   });
+  
   if (handled === false) {
     return false;
   }
+  
   if (!handled) {
     return true;
   }

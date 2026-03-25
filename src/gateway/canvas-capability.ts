@@ -1,3 +1,5 @@
+// Ye file capability-based access system implement karti hai jisme secure tokens URL me embed hote hain, parse hote hain, validate hote hain, aur phir request ko safely process kiya jata hai.
+
 import { randomBytes } from "node:crypto";
 
 export const CANVAS_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
@@ -39,12 +41,30 @@ export function buildCanvasScopedHostUrl(baseUrl: string, capability: string): s
   }
 }
 
+
+
+
+
+
+
+
+// Yeh function ek lambe, complex, aur security-token se bhare hue URL ko andar leta hai, 
+// usko tod kar check karta hai (ki koi hacker attack toh nahi?), aur phir server ko ek saaf-suthra, aasaan rasta aur token alag-alag karke de deta hai.
+// ye function rawUrl as an input le rha h. mtlb ki jo bhi request aai h, uskey req object m se req.url nikal liya aur yha pass kr diya. iska return type NormalizedCanvasScopedUrl h.
+// ye function ek safai karamchari hai. 
+// Server aane wale text URL par direct bharosa nahi kar sakta. Usko check karna, kaatna aur saaf karna zaroori hai.
 export function normalizeCanvasScopedUrl(rawUrl: string): NormalizedCanvasScopedUrl {
+
   const url = new URL(rawUrl, "http://localhost");
+  
   const prefix = `${CANVAS_CAPABILITY_PATH_PREFIX}/`;
+
   let scopedPath = false;
+  
   let malformedScopedPath = false;
+  
   let capabilityFromPath: string | undefined;
+  
   let rewrittenUrl: string | undefined;
 
   if (url.pathname.startsWith(prefix)) {

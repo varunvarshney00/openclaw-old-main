@@ -2,46 +2,71 @@
 
 // Jab bhi bahar ki duniya se, jaise (WhatsApp, Slack, Web UI, ya OpenAI) koi bhi request hmare server par aati hai, toh wo sabse pehle is file ke gate par knock krti hai.
 
+
+
+// OpenClaw ne yahan Express.js ya Fastify jaisa koi external third-party framework use nahi kiya hai. 
+// Usne Node.js ke ekdum core, in-built module node:http ka use kiya hai. 
+// Yeh dikhata hai ki codebase ekdum raw aur fast performance ke liye design hua hai.
 import {
+
+  // Yeh woh actual function hai jo server start karega (port 3000 ya 8080 par sun-na shuru karega).
+  // "as" ka mtlb hota h, Developer ne isko rename karke createHttpServer kar diya.
   createServer as createHttpServer,
   type Server as HttpServer,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+
+
 import { createServer as createHttpsServer } from "node:https";
+
 import type { TlsOptions } from "node:tls";
+
 import type { WebSocketServer } from "ws";
+
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
+
 import {
   A2UI_PATH,
   CANVAS_HOST_PATH,
   CANVAS_WS_PATH,
   handleA2uiHttpRequest,
 } from "../canvas-host/a2ui.js";
+
 import type { CanvasHostHandler } from "../canvas-host/server.js";
+
 import { loadConfig } from "../config/config.js";
+
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+
 import { safeEqualSecret } from "../security/secret-equal.js";
+
 import { handleSlackHttpRequest } from "../slack/http/index.js";
+
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   createAuthRateLimiter,
   normalizeRateLimitClientIp,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
+
 import {
   authorizeHttpGatewayConnect,
   isLocalDirectRequest,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
+
 import { CANVAS_CAPABILITY_TTL_MS, normalizeCanvasScopedUrl } from "./canvas-capability.js";
+
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
+
 import { applyHookMappings } from "./hooks-mapping.js";
+
 import {
   extractHookToken,
   getHookAgentPolicyError,
@@ -58,30 +83,94 @@ import {
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
+
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
+
 import { getBearerToken } from "./http-utils.js";
+
 import { handleOpenAiHttpRequest } from "./openai-http.js";
+
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
+
 import type { GatewayWsClient } from "./server/ws-types.js";
+
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
+
+
+// yha pr do cheezein aati hain ek toh javascript wala typeof aur ek typescript wala typeof.
+// JavaScript mein agar tum typeof "hello" likhoge toh woh "string" dega. 
+// Par TypeScript ke andar, typeof ek X-Ray Machine ban jata hai.
+// aur yha pr hum typescript wala typeof dekh rhe hain.
+// Yeh typeof createSubsystemLogger function ko chalata (execute) nahi hai. 
+// Yeh bas uska X-Ray nikalta hai aur dekhta hai ki: "Yeh function kitne parameters leta hai? Aur return kya karta hai?" 
+// Isey technical bhasha mein Function Signature bolte hain.
+// uske baad aata h ReturnType.
+// iska bs ek hi kaam h. "Mere < > brackets ke andar kisi bhi function ka X-Ray (typeof) daal do, main usme se input parameters ko kachre mein phek dunga, aur sirf uski Return Value ka naksha (type) bacha kar bahar nikalunga."
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
+
+
+// Hackers scripts likhte hain jo ek second mein 10,000 alag-alag passwords ya tokens guess kar sakti hain. 
+// Isey Brute-Force Attack kehte hain.
+// Server ko apne paas ek counter rakhna padta hai. "Agar koi lagataar galat password daal raha hai, toh usko thodi der ke liye block kar do."
+// Block karne ke liye do rules chahiye: Kitni galtiyan allowed hain? Aur kitne time frame mein?
+
+// Server kisi bhi IP address ya user ko maximum 20 baar galat password/token daalne ki permission dega.
 const HOOK_AUTH_FAILURE_LIMIT = 20;
+
+// Yeh 60,000 milliseconds (yani exactly 1 Minute) ka timer hai.
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 
+// "Agar kisi ne 1 minute ke andar 20 baar galat Auth Token bheja, toh usko block kar do aur aage uski request check bhi mat karo."
+
+
+
+
+
+// Yeh ek 'Remote Control' ka blueprint hai jisme sirf 2 buttons hain. 
+// Ek button AI ka alarm bajata hai, 
+// aur doosra button AI ko ek lamba task dekar ek Tracking ID (Receipt) wapas deta hai.
 type HookDispatchers = {
+  // Button 1: The "Wake" Button
+  // Yeh button do cheezein leta hai: Ek message (text) aur Urgency (mode ki abhi jagau ya agli heartbeat pe?).
+  // Yeh void return karta hai. 
+  // Iska matlab hai "Fire and Forget". 
+  // Tumne alarm baja diya, ab tumhe is function se koi jawaab (return) nahi chahiye. Server ko wait nahi karna padega.
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
+
+  // Button 2: The "Agent Task" Button
+  // Yeh poora ka poora task (Payload) leta hai (jaise kaunsa model, kya message, kya tools).
+  // Notice karo: Yeh ek string return karta hai.
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
 };
 
+
+
+// Jab ek server client ko response bhejta hai, toh us (Response) ke 3 main hisse hote hain:
+  // Status Code: Baat kaisi rahi? (Good, Bad, Error?)
+  // Headers: Lifafe ke upar ki jankari (Andar kya bhara hai?)
+  // Body: Asli saamaan (Data).
+// Yeh function in teeno ko ek hi jhatke mein set karke parcel dispatch kar deta hai.
 function sendJson(res: ServerResponse, status: number, body: unknown) {
+
+  // Yeh client ko batata hai ki request ka nateeja kya nikla.
   res.statusCode = status;
+  
+  // Agar tum yeh nahi likhoge, toh client ka browser sochega ki tumne usko ek normal text file ya HTML file bheji hai, aur data ajeeb sa dikhega.
+  // Yeh ek sticker hai jo lifafe par lagta hai. Yeh client ko bolta hai: "Bhai, andar jo text hai usko normal text mat samajhna, woh ek JSON object hai. Usko parse kar lena." charset=utf-8 ensure karta hai ki emojis aur doosri languages ke characters sahi se dikhein.
   res.setHeader("Content-Type", "application/json; charset=utf-8");
+
+  // JSON.stringify(body): JavaScript ke object/array ko ek simple string (text) mein convert karta hai, kyunki internet par data sirf text/bytes ke format mein travel kar sakta hai.
+  // res.end(...): Yeh final thappa hai. Yeh data ko connection ke pipe mein daalta hai aur pipe ko band kar deta hai. "Mera jawaab khatam, ab call cut karo."
   res.end(JSON.stringify(body));
 }
 
+
+
+// Yeh function bas ek list check karke true ya false mein jawaab deta hai ki aane wali request OpenClaw ke "Canvas (Interactive UI)" department ki hai ya nahi.
 function isCanvasPath(pathname: string): boolean {
   return (
     pathname === A2UI_PATH ||
@@ -92,37 +181,134 @@ function isCanvasPath(pathname: string): boolean {
   );
 }
 
+
+
+// Yeh function check karta hai ki Gateway se judne wala naya WebSocket client koi aam user (Browser/UI) hai, ya phir OpenClaw ka hi koi internal worker/AI Agent (Node) hai?
+
+// Sach 1 (The Pipes): WebSocket ek khuli hui pipe hoti hai jisme data dono taraf continuously flow karta hai.
+// Sach 2 (The Clients): OpenClaw Gateway se 2 tarah ke log is pipe ke through judte hain:
+// Frontend UI (Browser): Jo sirf yeh dekhna chahta hai ki "AI ne kya type kiya?" (Read-heavy).
+// Worker Nodes (Sub-agents/Runners): Jo doosri machines par baithe hain aur Gateway se bolte hain: "Bhai koi naya heavy task hai toh mujhe de, main process karke wapas bhejta hu."
+// Gateway ko in dono ke beech farq pata hona chahiye, taaki galti se kisi normal user ko "Background Job" process karne ko na de de! Yeh function wahi "Identity Test" hai.
+
+// Yeh function true return karta hai agar client ek "Node" (Worker) hai ya nhi, aur uske liye yeh 2 checks lagata hai:
 function isNodeWsClient(client: GatewayWsClient): boolean {
+
+  // Check 1: The Direct Badge
+    // Kya hai: Jab client connect hota hai, toh woh apna connect object bhejta hai. Agar usne saaf-saaf apna role "node" set kiya hua hai, toh function turant true bol deta hai. (Yeh sabse fast aur modern tareeqa hai).
   if (client.connect.role === "node") {
     return true;
   }
+
+  // Check 2: The Legacy/Mode Fallback
+    // Agar role define nahi tha, toh function client ke purane details (mode) ko check karta hai.
+    // Client kisi purane version se ya ajeeb casing (jaise "NoDe", " NODE ") mein data bhej sakta hai. Yeh normalize function us kachre ko saaf karke ek standard format mein laata hai, aur phir check karta hai ki kya woh standard GATEWAY_CLIENT_MODES.NODE se match ho raha hai. 
   return normalizeGatewayClientMode(client.connect.client.mode) === GATEWAY_CLIENT_MODES.NODE;
 }
 
+// ek kahani
+
+// 🎭 The Setup (Kahaani Ke Kirdaar)
+// The AI Agent (The Chef): Jo background mein soch raha hai aur UI (Canvas) ke liye code/data bana raha hai.
+// The Gateway (The Bouncer): OpenClaw ka main server, jo saare connections (WebSockets) ko handle karta hai.
+// The User (You): Jo browser mein baith kar live output dekhna chahta hai.
+// The Hacker (The Snoop): Jo bina permission ke tumhara data dekhna chahta hai.
+
+// 🟢 Flow 1: The AI Agent Flow (The Setup)
+// Yeh flow tab chalta hai jab tum prompt dete ho: "Make a snake game in Canvas".
+// Thinking & Decision: AI Agent ko samajh aata hai ki mujhe Canvas UI kholna padega.
+// Generating the Secret: Agent turant ek bohot lamba, random password generate karta hai (e.g., secret_77xyz99). Isey hum Capability Token kehte hain.
+// Registering with the Bouncer: Agent apne secure WebSocket connection ke through Gateway (Bouncer) ko bolta hai: "Bhai, main apna Canvas khol raha hu. Mera secret password secret_77xyz99 hai. Yeh aane wale 5 minute tak valid rahega."
+// Sending the Link to User: Agent tumhari normal chat screen par ek button/link bhej deta hai, jiske andar woh password chupa hota hai: https://openclaw.com/canvas?oc_cap=secret_77xyz99.
+
+// 🔵 Flow 2: The Legit User Flow (The Golden Path)
+// Yeh flow tab chalta hai jab tum us 'Open Canvas' button pe click karte ho.
+// The Click: Tumne button dabaya. Tumhara browser background mein ek naya WebSocket connection (live pipe) kholne ki koshish karta hai Gateway ke sath.
+// Presenting the Passcode: Browser Gateway ko bolta hai: "Mujhe Canvas se judna hai, aur mere paas yeh pass hai: ?oc_cap=secret_77xyz99."
+// The Gateway Check (Woh Function!): Gateway turant wahi function (hasAuthorizedNodeWsClientForCanvasCapability) chalata hai.
+// Gateway dekhta hai: "Kya andar koi AI Agent baitha hai jiska password secret_77xyz99 hai?"
+// Match Found!
+// The Live Stream: Gateway tumhare browser aur us AI Agent ki pipe ko aapas mein jod deta hai. Ab AI Agent jo bhi code likhega, woh directly tumhari screen (Canvas) par live animate hoga!
+// Sliding Window: Jab tak tum us page par ho aur data flow ho raha hai, Gateway us 5 minute ke timer ko aage badhata rehta hai taaki tumhara connection toote na.
+
+// 🔴 Flow 3: The Hacker Flow (The Block)
+// Ab socho ek hacker, jiska naam Bob hai, usko pata chal gaya ki tum OpenClaw use kar rahe ho.
+
+// Scenario A: The Guesser
+// Bob apne browser mein type karta hai: https://openclaw.com/canvas. (Bina kisi token ke).
+// Gateway dekhta hai: "Token kahan hai bhai?" aur turant connection kaat deta hai (403 Forbidden). Bob ko blank screen dikhti hai.
+
+// Scenario B: The Brute-Forcer
+// Bob script lagata hai aur random tokens try karta hai: ?oc_cap=123, ?oc_cap=abc.
+// Gateway function chalata hai. Usko apne andar zinda AI Agents ki list mein aisi koi 'Capability' milti hi nahi. Woh connection kaat deta hai. (Aur yaad hai humne pichli files mein Rate Limiter padha tha? 20 baar aisi harkat karne par Gateway Bob ka IP hi block kar dega!).
+
+// Scenario C: The Latecomer (Expired Token)
+// Bob ne galti se tumhara purana link copy kar liya jo tumne kal use kiya tha: ?oc_cap=old_secret_111.
+// Gateway dekhta hai: "Haan, yeh password kal ek Agent ne use toh kiya tha, par uski ExpiresAtMs limit kal hi khatam ho chuki hai!"
+// Connection Dropped. Bob fails again.
+
+// 💡 The Master Question: "Token browser cookie mein kyu nahi rakha? URL mein kyu bheja?"
+// Agar hum tumhari main chat wali ID/Cookie use karte, toh Gateway ko pehle Database mein jaakar check karna padta ki "Kya is user ne yeh agent start kiya tha?". Database checking slow hoti hai.
+
+// Capability Token (oc_cap) URL mein bhejkar humne Gateway ka kaam ekdum fast (Stateless) kar diya. Gateway ko database check nahi karna, usko bas apne RAM mein baithe zinda AI connections ki list mein password match karna hai. O(N) memory search! Fast and Secure.
+
+
+
+
+// Yeh function check karta hai ki kya server par koi aisa zinda AI Agent (Node) connected hai jisne Canvas UI ko control karne ka woh 'Secret Passcode' (Capability) generate kiya tha?
 function hasAuthorizedNodeWsClientForCanvasCapability(
+
+  // Yeh un sabhi WebSockets ki ek list hai jo is waqt tumhare OpenClaw server se connected hain.
   clients: Set<GatewayWsClient>,
+
+  // Yeh wahi secret token hai jo Browser (User) ne URL mein bheja tha (?oc_cap=secret_77xyz99). Yeh woh chabi hai jiska tala humein us clients ki bheed mein dhoondhna hai.
   capability: string,
+
+  // Ya toh true (Andar aane do), ya false (Bahar nikal do).
 ): boolean {
+  
+  // abhi ka time nikal liya aur nowMs, variable m daal lia
   const nowMs = Date.now();
+  
+  // yha ek ek krke jo bhi connected clients h unme check hoga.
   for (const client of clients) {
+  
+    // Kya yeh client ek AI Agent (Node) hai?" Agar normal user (Browser) hai, toh usko ignore karo (continue), kyunki Canvas permissions sirf AI Agents ke paas hoti hain.
     if (!isNodeWsClient(client)) {
       continue;
     }
+  
+    // Kya is Agent ne Canvas ka feature on kiya hua hai aur expiry time set kiya hai?" 
+    // Agar nahi, toh ignore.
     if (!client.canvasCapability || !client.canvasCapabilityExpiresAtMs) {
       continue;
     }
+  
+    // Kya is Agent ki Canvas access expire ho chuki hai?" 
+    // Agar time nikal gaya hai, toh ignore. 
+    // (Yeh security ke liye zaroori hai taaki purane links hamesha ke liye na chalte rahein).
     if (client.canvasCapabilityExpiresAtMs <= nowMs) {
       continue;
     }
+  
+    // "Kya user ka password aur Agent ka password match ho gaya?" Agar haan, toh andar aane do!
+    // humne safequalsecret use kiya h kyuki safeEqualSecret chahe 1st letter galat ho ya 100th, hamesha exact same time (e.g., 2ms) lega result dene mein.
     if (safeEqualSecret(client.canvasCapability, capability)) {
       // Sliding expiration while the connected node keeps using canvas.
+
+      // Agar password match ho gaya, toh server bolta hai: "Chalo bhai, pass toh sahi hai. Aur kyunki tumne abhi-abhi apna pass dikhaya hai, iska matlab tum abhi zinda/active ho. Main tumhare pass ki expiry ko abhi ke time (nowMs) se theek 5 minute aage dhakel raha hu."
       client.canvasCapabilityExpiresAtMs = nowMs + CANVAS_CAPABILITY_TTL_MS;
       return true;
     }
+    
   }
+  
   return false;
 }
 
+
+
+// Yeh Canvas UI ka "Master Security Checkpoint" hai. Yeh 4 alag-alag tareeqon se check karta hai ki aane wala aadmi Canvas access karne ke laayak hai ya nahi. Agar ek bhi tareeqe se pass ho gaya, toh entry mil jati hai.
 async function authorizeCanvasRequest(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
@@ -133,6 +319,7 @@ async function authorizeCanvasRequest(params: {
   malformedScopedPath?: boolean;
   rateLimiter?: AuthRateLimiter;
 }): Promise<GatewayAuthResult> {
+
   const {
     req,
     auth,
@@ -143,15 +330,19 @@ async function authorizeCanvasRequest(params: {
     malformedScopedPath,
     rateLimiter,
   } = params;
+  
   if (malformedScopedPath) {
     return { ok: false, reason: "unauthorized" };
   }
+  
   if (isLocalDirectRequest(req, trustedProxies, allowRealIpFallback)) {
     return { ok: true };
   }
 
   let lastAuthFailure: GatewayAuthResult | null = null;
+  
   const token = getBearerToken(req);
+  
   if (token) {
     const authResult = await authorizeHttpGatewayConnect({
       auth: { ...auth, allowTailscale: false },
@@ -161,17 +352,23 @@ async function authorizeCanvasRequest(params: {
       allowRealIpFallback,
       rateLimiter,
     });
+  
     if (authResult.ok) {
       return authResult;
     }
+  
     lastAuthFailure = authResult;
   }
 
   if (canvasCapability && hasAuthorizedNodeWsClientForCanvasCapability(clients, canvasCapability)) {
     return { ok: true };
   }
+  
   return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
 }
+
+
+
 
 function writeUpgradeAuthFailure(
   socket: { write: (chunk: string) => void },
@@ -201,6 +398,9 @@ function writeUpgradeAuthFailure(
   }
   socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
 }
+
+
+
 
 export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
@@ -741,33 +941,115 @@ export function createGatewayHttpServer(opts: {
         void handleRequest(req, res);
       });
 
-      
+  
+  // ye toh hmara ek request handler function ho gya, req hmari incoming request h, res hmara response h jo hum bhejengey.
+  // server pr jo bhi request hit kregi wo yhi pass krdi jayegi, handleRequest function ko.
   async function handleRequest(req: IncomingMessage, res: ServerResponse) {
+
+    // ab chaliye dekhtey hain ye block of code humne kyu add kiya h. jb browser (client), server se response leta hai, toh ek risk ho skta h, ki jo browser h wo insecure behave kr skta h ek toh aur dusra, attackers beech m data modify kr skte h jo server se aa rha h. 
+    // isliye server ko, browser ko rules btane pdtey h, ki tum kaise behave krogey. aur ye rules http headers k thru bheje jate h.
+    // ye ek helper function h jo repsonse m security headers add kr rha h.
+    // kyu? taki browsers secure tareeke se response handle kr skein.
+    // production systems n security headers compulsory hotey h.
     setDefaultSecurityHeaders(res, {
       strictTransportSecurity: strictTransportSecurityHeader,
     });
 
+    // Ye code check karta hai ki request WebSocket upgrade ki hai ya nahi — agar hai, to usse ignore karta hai kyunki WebSocket handling kisi aur system (ws library) ke through hoti hai.
+    // Sabse Badi Wajah: Normal HTTP request ek "Phone Call" jaisi hoti hai — Aapne call kiya, baat ki, aur phone kaat diya (Connection Closed). Par WebSocket ek "Walkie-Talkie" jaisa hota hai — Connection hamesha on rehta hai. 
+    // Agar HTTP handler ne is request ko touch kar liya ya respond kar diya, toh network pipe band ho jayega aur WebSocket ban hi nahi payega.
+    // Jab yeh function return karta hai, toh pichhe baitha hua server.on('upgrade', ...) event jag jata hai, jo is raw connection ko pakad kar pakka WebSocket bana deta hai.
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
       return;
     }
 
+    // Jo saari requests upar se filter hokar aayi hain (chahe HTTP ho ya HTTPS), woh sabse pehle is try block se takrati hain.
     try {
+      
+      // aap dekh sktey ho ki yha pr developer ne config variables ko file k top pr rkhne ki jagah, Usne isko request aane ke andar rakha hai. 
+      // Iska matlab hai ki agar admin, server chalte waqt config file mein koi change karta hai (jaise naya password set karna), toh server ko restart kiye bina hi agli request mein woh naye rules apply ho jayenge! 
+      // Isey Hot-Reloading kehte hain.
       const configSnapshot = loadConfig();
+
+      // ab yha pr hum config se do cheezein nikal rahe hain: 
+      // 1) Kis-kis (Proxy/Load Balancer) par bharosa kiya ja sakta hai. 
+      // 2) Kya proxy na hone par original IP ka andaza (fallback) lagana allowed hai?
+      // toh isko aise smjho ki Jab hmara server Cloudflare ya AWS ke peeche hota hai, toh har request ka IP "Cloudflare ka IP" dikhta hai, asli user ka nahi. 
+      // Asli IP `X-Forwarded-For` header mein chup ke aata hai. 
+      // Par hacker bhi fake header bhej sakte hain. 
+      // Isliye server ko pata hona chahiye ki kaunse IP sach mein Cloudflare ke hain (jinpe trust karna hai). |
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+      
+
+
+      // Yeh line incoming URL ko ek special function `normalizeCanvasScopedUrl` ke through pass kar rahi hai. 
+      // Yeh function ek kachre wale URL ko leta hai, usko dho-poch kar saaf karta hai, hacker attacks ko detect karta hai, aur ekdum clean structured data baahar nikal kar Gateway server ko de deta hai taaki server aaram se apna kaam kar sake!
+      // Ek baat aur ki, Node.js mein req.url ki value hamesha sirf rasta (path) aur query hoti hai, jaise /canvas/app.js?id=1. 
+      // Isme kabhi bhi aage ka http://www.domain.com nahi hota. Asli base URL (Domain/IP) humein req.url mein nahi, balki request ke lifafe yani req.headers.host mein milta hai.
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
+      
+      // ab dekhtey hain ki ye wala block kya kr rha h. 
+      // Internet se aane wala koi bhi data (jaise URL) safe nahi hota. Hacker kuch bhi type kar sakta hai.
+      // Server ko apna kaam karne se pehle ensure karna padta hai ki jo URL aaya hai, kya uska format (shape) waisa hi hai jaisa humne design kiya tha? 
+      // Agar shape bigda hua hai, toh usko "Malformed" kehte hain.
+      // Agar URL malformed hai, toh server ko yeh nahi sochna chahiye ki "Shayad iska matlab yeh hoga". 
+      // Server ko seedha connection kaat dena chahiye.
+      // Jab tum connection kaat-te ho, toh hacker ko asli wajah mat batao (jaise: "Aapne URL mein double slash laga diya"). Sirf ek generic message do: "Aapko permission nahi hai (Unauthorized)".
       if (scopedCanvas.malformedScopedPath) {
+
+        // Yeh line client (hacker ya user) ko ek Error Message bhej rahi hai jisme likha hai "unauthorized" (tumhe entry nahi milegi).
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
+
+        // Execution ko yahin par turant rok dena.
         return;
       }
+      
+
+      // ab rewritten url k andar kya hoga isko example se dekhtey h.
+      // manlo hmare dost ne browser mein yeh secret link paste kiya:
+      // 👉 /__openclaw__/cap/VIP-TOKEN-999/profile/settings
+      // toh ab server kya krega, Server isko ek naye, standard web format mein convert kr deta hai.
+      // 👉 "/profile/settings?oc_cap=VIP-TOKEN-999" --> yhi h hmara rewritten url, aur aisa kyu hota h
+      // Agar tum dhyaan se dekho, toh pehle Token (path) ke beech mein fasa hua tha (.../cap/TOKEN/profile...).
+      // Aage aane wala jo UI server hai (maan lo React ya Next.js), usko page load karna hai. 
+      // Agar tum usko /__openclaw__/cap/VIP-TOKEN-999/profile/settings doge, toh woh bolega: "Bhai, mere paas is naam ka koi folder ya page nahi hai! 404 Not Found."
+      // Par jab tum usko rewrittenUrl yani /profile/settings?oc_cap=VIP-TOKEN-999 doge, toh UI server turant samajh jayega:
+      // Path: "Mujhe /profile/settings wala page dikhana hai."
+      // Query Parameter (?oc_cap=...): "Aur load hote waqt mujhe check karna hai ki user ke paas VIP-TOKEN-999 ki permission hai ya nahi."
       if (scopedCanvas.rewrittenUrl) {
+
+        // Nayi value ko purane variable (req.url) ke upar overwrite kar deta hai.
         req.url = scopedCanvas.rewrittenUrl;
       }
+      
+      // ye line kya kregi, ye line naye/purane req.url ko leti hai, usko URL padhne wali machine (new URL) mein daalti hai, aur usme se sirf .pathname (raasta) nikal kar requestPath variable mein save kar leti hai.
+      // req.url ke andar raaste ke saath-saath extra baggage bhi hota hai (jaise ?oc_cap=secret123 ya ?theme=dark). Agar hum is poore ko match karenge toh server file nahi dhoondh payega. Server ko strictly sirf room number (path) chahiye hota hai.
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      
+
+      // ✅ Scenario A (Webhook Request Aayi):
+      // Request aayi /api/webhooks/github se.
+      // handleHooksRequest ne URL dekha aur bola: "Haan, yeh mera department hai!"
+      // Usne webhook process kiya (Wake/Agent hook chalaya) aur bola return true;.
+      // Tumhari if condition ko true mil gaya. Uske andar ka return; execute ho gaya.
+      // Result: Main function (Gateway) wahin ruk gaya, taaki woh aage jaakar galti se is webhook ko Canvas UI samajh kar error na de de. (Isey Early Exit pattern kehte hain).
+
+      // ❌ Scenario B (Normal Canvas Request Aayi):
+      // Request aayi /canvas/app.js se.
+      // handleHooksRequest ne URL dekha aur bola: "Yeh webhook nahi hai, mera isse koi lena-dena nahi."
+      // Usne chup-chap return false; de diya.
+      // Tumhari if condition fail ho gayi.
+      // Result: Code us if block ko chhod kar niche chala gaya, jahan tumhara main Gateway function baaki ka kaam (Canvas serve karna) aaram se karta rahega.
       if (await handleHooksRequest(req, res)) {
         return;
       }
+      
+      // Main server aane wali request ko is "Tools Manager" wale function ke paas bhejta hai aur poochta hai: "Bhai, kya yeh request tumhare department (Tools invoke) ki hai?"
+      // Khali haath nahi bhejta. Server us manager ko request ke saath-saath uske security guards (rateLimiter) aur password checker (auth) bhi deta hai, taaki manager khud check kar sake ki aadmi legit hai ya nahi.
+      // Agar woh request sach mein Tools API ki thi, toh manager usko handle kar lega (chahe paas kare ya reject kare) aur wapas true bhej dega. true milte hi yeh if block chal jayega aur return ho jayega. Matlab main server yahin apna kaam rok dega, aage ki lines (jaise Canvas ya Webhooks check karna) nahi padhega.
+      // Agar request Tools API ki nahi thi, toh manager bolega false. if block fail ho jayega, aur server chup-chaap aage badh jayega check karne ki "Shayad yeh kisi aur department ki request hogi."
       if (
         await handleToolsInvokeHttpRequest(req, res, {
           auth: resolvedAuth,
@@ -778,15 +1060,23 @@ export function createGatewayHttpServer(opts: {
       ) {
         return;
       }
+      
+      // Yeh block check karta hai ki aane wali request kahin Slack (Messaging App) ki taraf se toh nahi aayi hai? 
+      // Agar haan, toh usko "Slack Department" handle kar lega aur main server apna kaam yahin rok dega.
       if (await handleSlackHttpRequest(req, res)) {
         return;
       }
+      
+      // OpenClaw sirf apne in-built features par dependent nahi hai. Agar kal ko koi developer apna custom feature (Plugin) banakar isme daalna chahe, toh yeh block us plugin ko internet ki requests sunne ki power deta hai.
+      // Yeh block check karta hai ki kya aane wali request kisi "Custom Plugin" ke liye hai? Agar haan, toh usko handle karta hai, par core "Channels" ko access karne se pehle ek strict ID/Password check bhi karta hai.
       if (handlePluginRequest) {
         // Channel HTTP endpoints are gateway-auth protected by default.
         // Non-channel plugin routes remain plugin-owned and must enforce
         // their own auth when exposing sensitive functionality.
         if (requestPath === "/api/channels" || requestPath.startsWith("/api/channels/")) {
+      
           const token = getBearerToken(req);
+      
           const authResult = await authorizeHttpGatewayConnect({
             auth: resolvedAuth,
             connectAuth: token ? { token, password: token } : null,
@@ -795,15 +1085,18 @@ export function createGatewayHttpServer(opts: {
             allowRealIpFallback,
             rateLimiter,
           });
+      
           if (!authResult.ok) {
             sendGatewayAuthFailure(res, authResult);
             return;
           }
         }
+      
         if (await handlePluginRequest(req, res)) {
           return;
         }
       }
+      
       if (openResponsesEnabled) {
         if (
           await handleOpenResponsesHttpRequest(req, res, {
@@ -817,6 +1110,7 @@ export function createGatewayHttpServer(opts: {
           return;
         }
       }
+      
       if (openAiChatCompletionsEnabled) {
         if (
           await handleOpenAiHttpRequest(req, res, {
@@ -829,6 +1123,7 @@ export function createGatewayHttpServer(opts: {
           return;
         }
       }
+      
       if (canvasHost) {
         if (isCanvasPath(requestPath)) {
           const ok = await authorizeCanvasRequest({
@@ -841,18 +1136,22 @@ export function createGatewayHttpServer(opts: {
             malformedScopedPath: scopedCanvas.malformedScopedPath,
             rateLimiter,
           });
+      
           if (!ok.ok) {
             sendGatewayAuthFailure(res, ok);
             return;
           }
         }
+      
         if (await handleA2uiHttpRequest(req, res)) {
           return;
         }
+      
         if (await canvasHost.handleHttpRequest(req, res)) {
           return;
         }
       }
+      
       if (controlUiEnabled) {
         if (
           handleControlUiAvatarRequest(req, res, {
@@ -862,6 +1161,7 @@ export function createGatewayHttpServer(opts: {
         ) {
           return;
         }
+      
         if (
           handleControlUiHttpRequest(req, res, {
             basePath: controlUiBasePath,
