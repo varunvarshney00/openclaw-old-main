@@ -2,7 +2,23 @@
 
 // Jab bhi bahar ki duniya se, jaise (WhatsApp, Slack, Web UI, ya OpenAI) koi bhi request hmare server par aati hai, toh wo sabse pehle is file ke gate par knock krti hai.
 
+// 1. Third-Party Webhooks & Services (External Systems)
+  // Yeh woh automated requests hain jo bahar ki duniya ke servers hmare system ko bhejte hain.
+  // Agar kisi external system mein koi event hota hai (jaise payment success), toh woh yahan request bhejta hai taaki AI agent jag jaye aur koi action le. 
+  // Agar koi user Slack par hmare AI bot ko message karta hai, toh Slack ke servers HTTP request hmare is Gateway par bhejte hain.
 
+// 2. Normal Users (Humans via Web Browser)
+  // Yeh woh asli log hain jo screen ke aage baith kar UI se interact kar rahe hain. 
+  // Real-time Chat Users ki request bhi isi gateway pr handle hoti hai via (WebSocket).
+
+// 3. AI Agents & Worker Nodes (Internal/External Machines)
+  // Yeh woh background workers ya sub-agents hain jo actual task execute karte hain.
+  // Jab kisi AI agent ko lagta hai ki usko koi specific tool chalana hai, toh woh server se baat karta hai.
+
+// 4. External Apps & Developers (API Consumers)
+  // Agar kal ko koi aur app tumhare backend ki power use karna chahe.
+  // Agar kisi ne standard OpenAI format (/v1/chat/completions) mein request bheji, toh yeh server usko bhi process kar lega.
+  // Agar kisi developer ne system mein external plugin joda hai, toh uski requests yahan route hongi.
 
 // OpenClaw ne yahan Express.js ya Fastify jaisa koi external third-party framework use nahi kiya hai. 
 // Usne Node.js ke ekdum core, in-built module node:http ka use kiya hai. 
