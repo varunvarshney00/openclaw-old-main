@@ -1,27 +1,3 @@
-// Yeh file ek HTTP bridge hai jo bahar se aane wali requests (text, images, files, tools) ko pakadti hai, AI Agent ko run karti hai, aur uske output ko wapas client ko bhejti hai 
-// --> ya toh ek saath (Non-Streaming), ya word-by-word (Streaming Server-Sent Events - SSE).
-
-// Yeh effectively OpenAI ke /v1/chat/completions endpoint jaisa hi ek system hai, par OpenClaw ke architecture ke hisaab se.
-
-// AI Agent core engine mein chalta hai. Par bahar ki duniya (web apps, mobile apps, curl commands) direct engine se baat nahi kar sakti. 
-// Unhe ek REST API chahiye.
-
-// User sirf "Hi" nahi bhejta. 
-// Woh PDFs (input_file), URLs se images (input_image), aur extra instructions bhi bhejta hai. 
-// In sabko parse karke ek single context banana padta hai.
-
-// AI jab lamba answer likhta hai toh wait karna boring hota hai. 
-// Isliye API ko dono modes support karne padte hain:
-  // Wait & get full answer (Non-Streaming).
-  // Get words as they are typed (Streaming via SSE).
-
-// AI sirf bolta nahi hai, action bhi leta hai. 
-// Agar AI ko lagta hai ki use koi third-party tool chalana chahiye, toh usko apna output rok kar client ko bolna padta hai: "Bhai, pehle yeh tool chala ke laa" (Function Calling).
-
-// Yeh akeli file in saari complexities ko handle kar rahi hai!
-
-
-
 /**
  * OpenResponses HTTP Handler
  *
@@ -69,14 +45,6 @@ import {
 } from "./open-responses.schema.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 
-
-
-
-
-
-
-// yha pr hum ek type define kr rhe hain, jiska naam hai OpenResponsesHttpOptions. 
-// aur iss data type k andar ye sari properties hungi.
 type OpenResponsesHttpOptions = {
 
   // Yeh batata hai ki server par authentication ka tarika kya hoga.
@@ -104,36 +72,14 @@ type OpenResponsesHttpOptions = {
   rateLimiter?: AuthRateLimiter;
 };
 
-
-
-
-
-
-// 1024 Bytes = 1 Kilobyte (KB)
-// 1024 KB = 1 Megabyte (MB)
-// Toh 20 * 1024 * 1024 ka exact matlab hai 20 Megabytes (20 MB).
-// Yeh request ka maximum size hai. Agar request body 20MB se 1 byte bhi badi hui, toh server pehla layer (Bouncer) hi usko 413 Payload Too Large bol kar reject kar dega.
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 
-// User apne prompt ke sath maximum kitne external URLs (images ya files ke link) bhej sakta hai.
-// Agar tum AI ko prompt dete ho: "In images ko compare karo", toh tum maximum 8 image links bhej sakte ho.
 const DEFAULT_MAX_URL_PARTS = 8;
 
-
-
-
-
-
-// Yeh function Node.js ko sikhata hai ki AI ka lamba answer ek saath bhejne ke bajaye, usko chhote-chhote tukdon (words) mein "Server-Sent Events" (SSE) protocol ke through hawa mein kaise udaya jaye.
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
-
-
-
-
-
 
 type ResolvedResponsesLimits = {
   maxBodyBytes: number;
@@ -142,13 +88,6 @@ type ResolvedResponsesLimits = {
   images: InputImageLimits;
 };
 
-
-
-
-
-// Yeh function configuration file ya user se aayi hui "Allowed Websites" (Hostname Allowlist) ki list ko saaf (sanitize) karta hai, taaki ek galti se type hue 'Space' ki wajah se poora security system fail na ho jaye.
-// Sach 1 (Human Error): Jab koi developer ya sysadmin config file likhta hai, toh aksar typing mistakes hoti hain. Jaise "github.com" ki jagah galti se " github.com " (extra space) ya ek khali line "" chhut jati hai.
-// Sach 2 (Machine Strictness): Computer bohot dumb hota hai. Uske liye "github.com" aur "github.com " dono bilkul alag aatmaein hain. Agar tum normalization (safai) nahi karoge, toh valid website bhi block ho jayegi.
 function normalizeHostnameAllowlist(values: string[] | undefined): string[] | undefined {
 
   // Agar user ne list bheji hi nahi, ya khali list bheji, toh aage ki mehnat kyu karni? Seedha undefined return kar do.
@@ -175,18 +114,6 @@ function normalizeHostnameAllowlist(values: string[] | undefined): string[] | un
   return normalized.length > 0 ? normalized : undefined;
 }
 
-
-
-
-
-// Yeh function "Configuration Normalization" ka engine hai. 
-// Iska kaam hai user/admin ki aadhi-adhuri settings ko lena, aur bachi hui khali jagahon par "Safe Defaults" (apni taraf se safe values) bhar kar ek 100% complete aur strict rulebook tayar karna.
-
-// Sach 1: Jab koi OpenClaw server deploy karta hai, toh woh har ek setting (timeout, max bytes, mime types) manually set nahi karta. 
-// Woh bas likh deta hai: config: { maxBodyBytes: 50MB }. Baaki sab woh khali chhod deta hai (undefined).
-// Sach 2: Par server ke core engine ko har cheez ki exact value chahiye. 
-// Woh undefined timeout par kaam nahi kar sakta.
-// The Solution: Yeh function us aadhi-adhuri config ko leta hai aur Nullish Coalescing (??) ka use karke bachi hui jagah defaults bhar deta hai.
 function resolveResponsesLimits(
   config: GatewayHttpResponsesConfig | undefined,
 ): ResolvedResponsesLimits {
@@ -198,24 +125,15 @@ function resolveResponsesLimits(
   const fileLimits = resolveInputFileLimits(files);
   
   return {
-    // Yeh bolta hai: "Agar admin ne maxBodyBytes diya hai, toh woh use karo. Par agar usne null ya undefined chhoda hai, toh mera DEFAULT_BODY_BYTES (20MB) utha lo."
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
-
-    // Kaam: Socho admin ne galti se URL limit -5 set kar di, ya 3.14 set kar di. Server toh aadhi URL download nahi kar sakta na?
-      // Math.floor(3.14) usko 3 bana dega (No decimals).
-      // Math.max(0, -5) usko 0 bana dega (No negative numbers).
-    // The Rule: "Mujhe sirf positive, solid numbers (integers) chahiye!"
     maxUrlParts:
       typeof config?.maxUrlParts === "number"
         ? Math.max(0, Math.floor(config.maxUrlParts))
         : DEFAULT_MAX_URL_PARTS,
-
     files: {
       ...fileLimits,
       urlAllowlist: normalizeHostnameAllowlist(files?.urlAllowlist),
     },
-
-    // 
     images: {
       allowUrl: images?.allowUrl ?? true,
       urlAllowlist: normalizeHostnameAllowlist(images?.urlAllowlist),
@@ -226,11 +144,6 @@ function resolveResponsesLimits(
     },
   };
 }
-
-
-
-
-
 
 function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
   return (body.tools ?? []) as ClientToolDefinition[];
