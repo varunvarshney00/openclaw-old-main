@@ -46,29 +46,11 @@ import {
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 
 type OpenResponsesHttpOptions = {
-
-  // Yeh batata hai ki server par authentication ka tarika kya hoga.
   auth: ResolvedGatewayAuth;
-
-  // Request ki body ka maximum size (bytes mein).
-  // Agar koi malicious user 5GB ki text file request mein bhej de, toh server ka RAM crash ho jayega (Out of Memory). 
-  // Yeh setting limit lagati hai (e.g., max 20MB allowed). ? ka matlab hai yeh optional hai, agar nahi bheja toh server apna default size use kar lega.
   maxBodyBytes?: number;
-
-  // Is specific /v1/responses endpoint ke apne special rules.
-  // User kitni images bhej sakta hai? Kitne PDFs attach kar sakta hai? URL se image download karne ka timeout kitna hoga? Yeh sab barik settings is dabe ke andar hoti hain.
   config?: GatewayHttpResponsesConfig;
-
-  // Load Balancers ya Reverse Proxies (jaise Nginx, Cloudflare, ya Azure Front Door) ke IP addresses ki list.
-  // Jab system cloud environment mein chalta hai, toh external internet ki request pehle Load Balancer par aati hai, phir server par. Server ko lagta hai request Load Balancer ke IP se aayi hai. 
-  // /Yeh list server ko batati hai: "Bhai, in IPs par bharosa karo, aur inke bheje hue 'X-Forwarded-For' header se user ka asli IP nikal lo."
   trustedProxies?: string[];
-
-  // Agar true hai, toh server request ke direct connection IP ko asli IP maan lega, in case proxy headers na milein. Yeh mostly local development ya direct testing ke time kaam aata hai.
   allowRealIpFallback?: boolean;
-
-  // Brute-force attacks ya API spam ko rokne ka mechanism.
-  // Agar koi bot 1 second mein 1000 requests bhej kar server ko thap (DDoS) karne ki koshish kare, toh yeh Rate Limiter usko block kar dega.
   rateLimiter?: AuthRateLimiter;
 };
 
@@ -89,28 +71,12 @@ type ResolvedResponsesLimits = {
 };
 
 function normalizeHostnameAllowlist(values: string[] | undefined): string[] | undefined {
-
-  // Agar user ne list bheji hi nahi, ya khali list bheji, toh aage ki mehnat kyu karni? Seedha undefined return kar do.
   if (!values || values.length === 0) {
     return undefined;
   }
 
-  // Machine 1: .map((value) => value.trim())
-  // Yahan humne bola, "Har string ko pakdo aur usko trim() kardo (aage-peeche ke spaces kaat do). Aur ek naya array bana kar aage bhej do."
-  // Output after Machine 1: ["google.com", "", "yahoo.com"] (Notice karo, beech wala item empty string ban gaya).
-
-  // The Dot (.)
-  // Isey Chaining kehte hain. Machine 1 se jo naya array nikla, woh kisi variable mein save hone ke bajaye, seedha Machine 2 ke andar ghus gaya. Yeh intermediate memory bachata hai aur code flow ko clean rakhta hai.
-
-  // Machine 2: .filter((value) => value.length > 0)
-  // filter machine array ko transform nahi karti, balki array ke har dabbe se ek Yes/No (True/False) sawaal poochti hai. Agar jawab "Yes" hai, toh us item ko naye array mein jaane deti hai, warna kachre mein phek deti hai.
-
-  // Sawaal: "Kya is string ki length 0 se zyada hai?"
-
-  // Output after Machine 2: ["google.com", "yahoo.com"] (Empty string fail ho gayi aur bahar nikal gayi).
   const normalized = values.map((value) => value.trim()).filter((value) => value.length > 0);
 
-  // Trimming ke baad, agar list mein sach mein kuch bacha hai, toh list return kar do, warna wapas se undefined return kr do.
   return normalized.length > 0 ? normalized : undefined;
 }
 
